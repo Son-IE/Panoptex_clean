@@ -2,14 +2,14 @@
 
 Risk-aware navigation for a mobile robot in a warehouse-like environment.
 The subject of this work is the **predictive risk field**: what a tracked
-object carries with it — a set of priors about whether it can move, whether
+object carries with it, a set of contexts (called "priors" in this local code works) about whether it can move, whether
 it is moving, what it is attached to, and what has moved through that place
-before — and how those priors are turned into risk projected forward in
+before,  and how those priors are turned into risk projected forward in
 time.
 
 Everything downstream of that field is deliberately thin. The field is
 handed to stock [Nav2](https://docs.nav2.org/) through its normal extension
-points; no planner or controller was modified, and the navigation side is
+points. No planner or controller was modified, and the navigation side is
 not a contribution of this work.
 
 This repository is the ROS 2 side of the system: five packages, no
