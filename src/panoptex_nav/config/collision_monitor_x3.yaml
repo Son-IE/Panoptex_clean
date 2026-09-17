@@ -1,0 +1,110 @@
+# collision_monitor_x3.yaml -- WP5: nav2_collision_monitor as the last-resort
+# reactive layer for the X3 sim, all four study arms. Sits AFTER the
+# controller + velocity_smoother in the command chain:
+#
+#   controller_server -> cmd_vel_nav -> velocity_smoother -> cmd_vel
+#     -> collision_monitor -> cmd_vel_safe -> base (X3_CMD_VEL_TOPIC=cmd_vel_safe)
+#
+# See src/panoptex_nav/README.md's "RGB-D depth + collision monitor" section
+# for the full chain diagram and the env-var wiring in the harness scripts.
+#
+# Derived from /opt/ros/humble/share/nav2_collision_monitor/params/
+# collision_monitor_params.yaml (installed version 1.1.20 -- checked with
+# `ros2 pkg xml nav2_collision_monitor | grep version` and by reading
+# /opt/ros/humble/include/nav2_collision_monitor/{polygon,collision_monitor_node}.hpp).
+#
+# IMPORTANT installed-version gotcha: 1.1.20 has NO `state_topic` parameter
+# and does NOT publish nav2_msgs/CollisionMonitorState -- that message type
+# is installed (nav2_msgs ships it regardless of which nav2 packages use it),
+# but `strings` on libcollision_monitor_core.so shows no "state_topic"/
+# "publish_state" symbol, and collision_monitor_node.hpp declares no such
+# publisher. A later nav2 adds it. So `state_topic` is DELIBERATELY omitted
+# below (the task's "if supported" clause) -- the harness's `run_arm.sh`/
+# `run_avoid.sh` bag record a `/collision_monitor_state` topic that will
+# simply never appear on this nav2 version; that's expected, not a bug.
+#
+# IMPORTANT #2: this version's per-polygon "point count" parameter is named
+# `max_points`, not `min_points`, and its meaning is INVERTED from the plan's
+# "min_points N" phrasing -- polygon.hpp's own doc comment: "Maximum number
+# of data readings within a zone to NOT trigger the action". I.e. the action
+# fires once the point count is STRICTLY GREATER than max_points, so
+# "min_points N" (trigger at >= N points) becomes `max_points: N - 1` here.
+
+collision_monitor:
+  ros__parameters:
+    use_sim_time: true
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel"
+    cmd_vel_out_topic: "cmd_vel_safe"
+    transform_tolerance: 0.3
+    source_timeout: 2.0
+    # Stock default (True): compensates each polygon zone for the robot's own
+    # base-frame shift over source_timeout before testing points against it.
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+    # 2026-09-09 mppi_panoptex_2: PolygonStop REMOVED from the active list. It is
+    # omnidirectional, so when a blind Carter made contact it kept the X3 stopped
+    # while being pushed 5 m along the lane -- "stop" is the worst response to a
+    # pusher. FootprintApproach is velocity-direction-aware (only stops when the
+    # commanded motion itself collides within time_before_collision), so escaping
+    # away from the contact stays allowed. The PolygonStop block is kept below for
+    # a lab robot that has no such adversary; add it back to `polygons` to re-enable.
+    polygons: ["PolygonSlow", "FootprintApproach"]
+
+    # Hard stop box. x +-0.22 m, y +-0.20 m: the X3 body is ~0.30 m wide
+    # (robot_radius 0.15 in the costmaps) so this stays within ~7 cm of the
+    # body on every side -- a refuge held 0.27 m off a shelf (mission_supervisor's
+    # refuge geometry) must NOT self-trigger this polygon just by standing still
+    # next to the rack.
+    PolygonStop:
+      type: "polygon"
+      points: [0.22, 0.20, 0.22, -0.20, -0.22, -0.20, -0.22, 0.20]
+      action_type: "stop"
+      # min_points 4 -> max_points 3 (see the installed-version note above).
+      max_points: 3
+      visualize: true
+      polygon_pub_topic: "polygon_stop"
+      enabled: true
+
+    # Slowdown box, well outside the stop box: x +-0.45 m, y +-0.40 m.
+    PolygonSlow:
+      type: "polygon"
+      points: [0.45, 0.40, 0.45, -0.40, -0.45, -0.40, -0.45, 0.40]
+      action_type: "slowdown"
+      slowdown_ratio: 0.4
+      # min_points 4 -> max_points 3.
+      max_points: 3
+      visualize: true
+      polygon_pub_topic: "polygon_slowdown"
+      enabled: true
+
+    # Time-to-collision check against the robot's actual published footprint
+    # and current velocity -- the "predictive" leg, complementing the two
+    # static zones above.
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "local_costmap/published_footprint"
+      time_before_collision: 1.0
+      simulation_time_step: 0.1
+      # min_points 6 -> max_points 5.
+      max_points: 5
+      visualize: false
+      enabled: true
+
+    observation_sources: ["scan", "pointcloud"]
+    scan:
+      type: "scan"
+      topic: "/scan"
+      enabled: true
+    # RGB-D depth cloud (WP5): same source and height band as the local
+    # costmap's `depth` obstacle layer (see the nav2_x3_*.yaml comment) --
+    # catches low pallets/rack shields the 0.11 m lidar plane misses, this
+    # time as the last-resort reactive check rather than the planning layer.
+    pointcloud:
+      type: "pointcloud"
+      topic: "/camera/camera/depth/points"
+      min_height: 0.05
+      max_height: 0.60
+      enabled: true

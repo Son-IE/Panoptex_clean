@@ -1,0 +1,8 @@
+<library path="nav2_risk_layer">
+  <class
+    name="nav2_risk_layer::RiskLayer"
+    type="nav2_risk_layer::RiskLayer"
+    base_class_type="nav2_costmap_2d::Layer">
+    <description>Adds an OccupancyGrid risk field to a Nav2 master costmap.</description>
+  </class>
+</library>

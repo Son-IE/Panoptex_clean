@@ -1,0 +1,82 @@
+# ekf_global.yaml  --  Workstream B2 (Phase 2 fusion, off by default)
+#
+# A SECOND robot_localization EKF, in the `map` frame, that fuses the
+# overhead camera's tag-0 robot pose (global_cam_localizer_node's
+# /global_cam/robot_pose) as an absolute correction on top of the existing
+# odom-frame EKF's continuous output. This instance owns `map -> odom`,
+# REPLACING slam_toolbox as that transform's publisher -- only one node may
+# publish it. See robot_base.launch.py's `enable_ekf_global` arg (default
+# false) and the plan's Workstream B open question before turning this on:
+# you likely want slam_toolbox in mapping-only mode (or switched to
+# localization-against-a-saved-map) once this is active, not fighting it
+# for map->odom.
+#
+# Modeled on the existing single-robot-shape EKF template at
+# yahboomcar_ws/src/yahboomcar_multi/param/X3_ekf_robot1.yaml (that file
+# fuses odom_raw + imu into odom->base_footprint; this one is the second
+# stage on top of it, map->odom, fusing that continuous estimate with the
+# overhead camera's absolute pose).
+#
+# `odom0` below assumes the existing (odom-frame) EKF publishes its filtered
+# estimate on the standard robot_localization default output topic,
+# /odometry/filtered. If your ekf_x1_x3_launch.py remaps that, override
+# `odom0` via the `odom_topic` launch argument in robot_base.launch.py.
+
+ekf_global_filter_node:
+  ros__parameters:
+    use_sim_time: false
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    print_diagnostics: false
+    publish_tf: true
+    reset_on_time_jump: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: map          # absolute pose fusion -> this EKF owns map->odom
+
+    # Continuous estimate from the existing odom-frame EKF -- already
+    # smooth and drift-free in the short term, just not globally anchored.
+    odom0: /odometry/filtered
+    odom0_config: [true,  true,  false,
+                   false, false, true,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    # Absolute, jump-capable correction from the overhead camera's tag-0
+    # observation (global_cam_localizer_node). Position + yaw only -- the
+    # tag gives no reliable roll/pitch/z for a ground robot.
+    pose0: /global_cam/robot_pose
+    pose0_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    pose0_differential: false
+    pose0_relative: false
+    pose0_queue_size: 10
+    # Reject a stray PnP solve (tag glare, partial occlusion) rather than
+    # let one bad frame yank the pose -- tune down once this looks stable.
+    pose0_rejection_threshold: 2.0
+
+    process_noise_covariance: [0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025, 0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.025, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]

@@ -1,0 +1,22 @@
+# GroundingDINO + SAM2, installed after requirements.txt (needs torch already
+# present in the environment) and with build isolation disabled:
+#
+#   pip install --no-build-isolation -r requirements-models.txt
+#
+# Why --no-build-isolation: GroundingDINO's setup.py imports torch at build
+# time and, if it can't find it, shells out to `pip install torch` itself --
+# which fails inside pip's isolated build sandbox (no pip module visible
+# there) and would otherwise pull in an unpinned torch anyway.
+
+# GroundingDINO lists `transformers` unpinned, so a fresh install pulls 5.x,
+# which its BERT text-encoder path does not work against. Pin 4.30.2 here,
+# ABOVE the -e lines, so pip resolves it jointly with GroundingDINO in the
+# same invocation rather than letting the install pull latest first.
+# Drags huggingface-hub back to <1.0 and tokenizers to 0.13.x -- expected.
+transformers==4.30.2
+
+# GroundingDINO -- risk_perception/model_adapters/grounding_dino_adapter.py
+-e git+https://github.com/IDEA-Research/GroundingDINO.git@856dde20aee659246248e20734ef9ba5214f5e44#egg=groundingdino
+
+# SAM2 / Grounded-SAM-2 -- risk_perception/model_adapters/sam2_adapter.py
+-e git+https://github.com/IDEA-Research/Grounded-SAM-2@b7a9c29f196edff0eb54dbe14588d7ae5e3dde28#egg=SAM_2

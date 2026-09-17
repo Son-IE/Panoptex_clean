@@ -1,0 +1,76 @@
+# Scenario v3 (2026-09-09, after avoid_panoptex_3): crossing moved from y = -3.0 to
+# y = +0.5. At y = -3 the westbound crossing sat 1 m from carter1's U-turn point
+# (aisle_south, y = -4.0): the Carter reversed direction right beside the X3, the
+# constant-velocity corridor pointed the wrong way (tta 0.8 s), and after contact
+# the Carter pushed the X3 8 m up the lane. At y = +0.5 both Carters run at
+# constant speed (carter1 turns at -4/+7, carter2's west leg turns at y = -1) and
+# overhead coverage is 65-78 %. Triangle A (3.40, 2.50) -> B (3.40, 0.50) ->
+# C (0.65, 0.50) -> (A); B->C and C->A cross both lanes.
+#
+# Waypoint loop for x3_nav.launch.py's mission_supervisor node (format:
+# yahboomcar_ws/src/yahboomcar_nav/waypoints/default_waypoints.yaml --
+# mission_supervisor reads the same schema). Poses are in `frame_id` (map).
+# yaw is RADIANS. loop:=true restarts the loop from wp_001 after wp_004, so
+# the wp_004 -> wp_001 leg (D -> A) happens automatically -- no duplicate
+# closing waypoint needed below.
+#
+# Scenario v2.1 (2026-09-09): triangle A -> B -> C -> (A). The v2 west-strip leg
+# C -> D (x = 0.65, 0.67 m from lane 1's centre) sat on the corridor edge and
+# kept the supervisor in refuge for 118 s of sim; C is now a touch-and-return
+# point, so each lap still crosses both lanes twice (B->C west, C->A east).
+# Scenario v2 (WP-C) was: rectangular loop A -> B -> C -> D -> (A), replacing the
+# old 4-point loop that started at the X3's spawn pose. The X3 still SPAWNS
+# at (0.38, 0.07) (see nav2_x3_panoptex.yaml's amcl.initial_pose) but that
+# point is deliberately NOT a waypoint here -- mission_supervisor drives the
+# X3 from the spawn onto wp_001 (A) as its first leg.
+#
+# Verified against warehouse/maps/warehouse_gt_x3.{yaml,pgm} (resolution
+# 0.05, origin [-10.4, -12.3], negate 0) with a numpy/PIL/scipy
+# distance-transform script (scratchpad wpc/check_waypoints_final.py, run
+# 2026-09-09): occupied = pixel < 50; clearance = Euclidean distance
+# transform to the nearest occupied cell, sampled every 5 cm along each
+# segment (bilinear-interpolated between cell centres). Lane centres:
+# carter1 patrol lane x = 1.32 (ground-truth median, +/-0.17), carter2 west
+# leg x = 2.15. Person distances from
+# warehouse/carters/tests/people_positions.json's 5 static people.
+#
+# Per-waypoint clearance / lane distances / nearest person:
+#   A (3.40, 0.50)  clearance=0.600 m  lane1_dx=2.08 m  lane2_dx=1.25 m  nearest_person=packageman@7.37 m
+#   B (3.40,-3.00)  clearance=0.600 m  lane1_dx=2.08 m  lane2_dx=1.25 m  nearest_person=person2a@4.80 m
+#   C (0.65,-3.00)  clearance=0.350 m  lane1_dx=0.67 m  lane2_dx=1.50 m  nearest_person=person2a@4.71 m
+#   D (0.65,-0.50)  clearance=0.350 m  lane1_dx=0.67 m  lane2_dx=1.50 m  nearest_person=packageman@5.49 m
+#
+# Per-segment (5 cm samples), min clearance / min person distance / lane
+# crossings:
+#   A->B:              min_clearance=0.600 m  min_person=4.80 m  crosses x=1.32: no   crosses x=2.15: no
+#   B->C:              min_clearance=0.350 m  min_person=4.55 m  crosses x=1.32: yes  crosses x=2.15: yes
+#   C->D:              min_clearance=0.350 m  min_person=4.71 m  crosses x=1.32: no   crosses x=2.15: no
+#   D->A (loop closure): min_clearance=0.350 m  min_person=5.49 m  crosses x=1.32: yes  crosses x=2.15: yes
+#
+# Both lane crossings happen exactly twice (once per traversal direction),
+# as required -- on B->C (eastbound->westbound A/B leg to C/D leg) and on
+# D->A (the return leg).
+#
+# C/D moved from x=0.60 to x=0.65: at x=0.60 the clearance to the shelf face
+# running north-south at x in [0.30, 0.33] came out to EXACTLY 0.300 m (6
+# cells @ 0.05 m/cell) -- technically meeting the >=0.30 m requirement but
+# with zero margin against pixel quantization, so bumped to x=0.65
+# (clearance 0.350 m) for real headroom, per the plan's contingency. Every
+# point and every segment now clears both the >=0.30 m obstacle-clearance
+# and >=1.5 m person-distance requirements with comfortable margin (>=0.35 m
+# / >=4.5 m measured).
+frame_id: map
+# Clearance check (scratchpad wpc/check_waypoints_v3.py, 2026-09-09):
+#   Per-waypoint:
+#     A (3.40,2.50) clearance=0.600m nearest_person=packageman@6.93m lane1_dx=2.08 lane2_dx=1.25
+#     B (3.40,0.50) clearance=0.600m nearest_person=packageman@7.37m lane1_dx=2.08 lane2_dx=1.25
+#     C (0.65,0.50) clearance=0.350m nearest_person=packageman@4.90m lane1_dx=0.67 lane2_dx=1.50
+#   
+#   Per-segment (5cm samples):
+#     A->B: min_clearance=0.600m min_person=6.93m crosses_lane1(x=1.32)=False crosses_lane2(x=2.15)=False
+#     B->C: min_clearance=0.350m min_person=4.90m crosses_lane1(x=1.32)=True crosses_lane2(x=2.15)=True
+#     C->A: min_clearance=0.350m min_person=4.90m crosses_lane1(x=1.32)=True crosses_lane2(x=2.15)=True
+waypoints:
+  - {name: wp_001, x: 3.40, y: 2.50, yaw: -1.571}
+  - {name: wp_002, x: 3.40, y: 0.50, yaw: 3.1416}
+  - {name: wp_003, x: 0.65, y: 0.50, yaw: 0.785}

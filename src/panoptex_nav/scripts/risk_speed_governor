@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Thin console-script launcher for panoptex_nav.risk_speed_governor.
+
+panoptex_nav is an ament_cmake + ament_cmake_python hybrid package (see
+CMakeLists.txt), not a plain ament_python one, so it has no setup.py
+entry_points -- this file is what `install(PROGRAMS ...)` installs to
+lib/panoptex_nav/risk_speed_governor, which is what `ros2 run panoptex_nav
+risk_speed_governor` actually execs. Its own name (no .py suffix) IS the
+executable name.
+"""
+
+from panoptex_nav.risk_speed_governor import main
+
+if __name__ == "__main__":
+    main()

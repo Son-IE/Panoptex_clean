@@ -1,0 +1,64 @@
+{
+  "trials": [
+    {
+      "label": "northeast_far",
+      "waypoints": [
+        [
+          7.5,
+          14.5,
+          -1.9196
+        ]
+      ]
+    },
+    {
+      "label": "east_near",
+      "waypoints": [
+        [
+          3.5,
+          3.5,
+          -1.8076
+        ]
+      ]
+    },
+    {
+      "label": "south_end",
+      "waypoints": [
+        [
+          0.0,
+          -11.0,
+          2.6241
+        ]
+      ]
+    },
+    {
+      "label": "southwest",
+      "waypoints": [
+        [
+          -6.5,
+          -7.3,
+          1.2668
+        ]
+      ]
+    },
+    {
+      "label": "north_mid",
+      "waypoints": [
+        [
+          -1.7,
+          8.0,
+          2.8906
+        ]
+      ]
+    },
+    {
+      "label": "northwest",
+      "waypoints": [
+        [
+          -9.5,
+          10.0,
+          0.2588
+        ]
+      ]
+    }
+  ]
+}

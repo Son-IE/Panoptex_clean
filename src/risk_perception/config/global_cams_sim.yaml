@@ -1,0 +1,221 @@
+# global_cams_sim.yaml -- single source of truth for the Isaac Sim overhead
+# cameras. Read by BOTH sides of the pipeline:
+#
+#   * tools/isaac_sim/global_cam_isaac.py   builds one ROS2-bridge ActionGraph
+#     per camera and exports each prim's ground-truth pose as a per-camera
+#     extrinsic yaml (config/<name>_extrinsic_sim.yaml);
+#   * launch/sim_global_cams.launch.py      spawns one detector/segmenter/
+#     projector chain + one static map->camera TF per camera.
+#
+# Plain YAML, NOT a ROS params file (no ros__parameters nesting).
+#
+# Adding a camera: place the prim in the stage, add an entry under `cameras:`,
+# re-run global_cam_isaac.py, relaunch. No rebuild: the launch file reads this
+# file and the per-camera extrinsics from the src tree, not the install share.
+# Everything else is derived from `name`.
+#
+# THE ONE ASSUMPTION (same as single-cam sim): the `map` frame the PC stack
+# uses is the stage's /Root origin -- same axes, floor at z=0. The exported
+# extrinsics are only valid under that identification. The warehouse map
+# (warehouse/maps/warehouse_x3_nav.yaml) was exported on exactly that contract.
+#
+# WHO PARSES WHAT (the two readers are hand-mirrored, keep them in sync):
+#   both:            stage-independent `cameras:` entries (name/prim_path and
+#                    the derived frame_id/image_topic/info_topic/extrinsic_yaml)
+#   isaac side only: stage, use_system_time, render_width, render_height,
+#                    per-camera graph_path
+#   launch side only: map_frame, inference_stride, costmap:, plus the two
+#                    optional top-level keys below --
+#     prompt                 open-vocabulary class list handed to EVERY GDINO
+#                            instance (omit to keep the node's own default)
+#     projector_max_range_m  drop floor points farther than this from the
+#                            camera (0.0 / omitted = off). The overhead views
+#                            sit ~24 deg below horizontal, so the top image
+#                            rows project tens of metres away; 15 m covers the
+#                            whole hall from any of the three mounts.
+
+stage: ~/workspace/warehouse/Baseline_scenario_metric.usd  # default for --stage
+map_frame: map
+
+# Camera stamps: sim time (from /clock, published by the stage's own
+# /ClockGraph). The whole PC stack must therefore run use_sim_time:=true --
+# the simulator sits at ~0.5x real time with these three cameras on, so
+# wall-clock stamps would skew against /tf, /odom, /scan and the Carters,
+# which are all on sim time. Verified live: image header stamps track /clock
+# to within one frame (33 ms).
+use_system_time: false
+
+# Render-product size, per camera. Optional; default = the size in
+# global_cam_intrinsics.yaml (1296x972, the real Pi Camera Module 1 mode).
+# A render product renders EVERY frame regardless of publish rate, so this --
+# not the publish rate -- is the FPS lever. Isaac scales CameraInfo with the
+# render product (measured: K becomes fx=fy=528.15, cx=324, cy=243 at
+# 648x486, i.e. exactly half the 1296x972 intrinsics), and
+# _set_camera_optics derives the FoV from the intrinsics yaml's own fx/width,
+# so halving these changes nothing but pixel count -- and GDINO resizes to
+# 800 px anyway.
+#
+# Measured on the RTX 3090, x3_sim/run_headless.py --seconds 30, same stage
+# with the X3 + both Carters:
+#   no global cams  35.0 FPS / 0.584x   (baseline)
+#   3x 1296x972     19.2 FPS / 0.320x   (-15.8 FPS -- too expensive)
+#   3x  648x486     28.4 FPS / 0.475x   (-6.6 FPS)  <-- current
+render_width: 648
+render_height: 486
+
+# Open-vocabulary prompt for the sim scene. Read by sim_global_cams.launch.py.
+#
+# EVERY ENTRY IS ONE WORD, on purpose. GroundingDINO grounds token spans, not
+# whole prompt entries, so a multi-word entry like "ground mobile robot"
+# fragments: one forklift came back as separate boxes labelled "ground",
+# "mobile", "robot" AND "ground mobile robot forklift". That wrecks three
+# things downstream --
+#   * object_tracker associates on an EXACT label match
+#     (object_tracker_node.py: `if tr.label.lower() != d["label"].lower()`),
+#     so each fragment becomes its OWN track: one forklift, five track ids.
+#   * risk_visualization.label_category only knows whole labels, so
+#     "ground mobile robot forklift" falls to category `unknown` / risk 0.40
+#     instead of `wheeled` / 0.95 -- the consequence weighting silently dies.
+#   * RViz then draws one text marker per fragment, which is the cloud of
+#     loose words over the map.
+#
+# chair/table/door RE-ADDED 2026-09-09: unlike the original assumption above,
+# they DO exist as real props in this warehouse (Chair_Rolling, Chair_Fixed,
+# Workstation_01/02 ground as "table", Door_01/Door_02) -- confirmed against
+# tools/rescale_to_metric.py's own top-level prim list, which is the
+# authoritative inventory of what's actually placed in the stage. Dropping
+# them here was only ever a workaround for the SHELVING grounding as
+# "table"/"chair"/"cable" at 0.09-0.24 (see box_threshold's comment in
+# risk_perception.yaml) -- box_threshold 0.35 already sits above that whole
+# false-positive band, so it does the real filtering; the vocabulary trim was
+# redundant with it and cost the real objects instead. Re-added chair/table/
+# door on that basis. If shelving false positives come back, raise
+# min_confidence/min_hits on object_tracker first (post-fusion, discriminates
+# far better -- see risk_perception.yaml's comment on that param), not this
+# vocabulary, per the same guidance already written above for forklift.
+#
+# "monitor . camera . cable ." STAY dropped: no such props exist in this
+# stage (nothing in rescale_to_metric.py's prim list), so keeping them would
+# only reopen a false-positive path with no real target to detect.
+#
+# "column ." (NOT "box" -- see next paragraph) deliberately still not added:
+# not a standalone prop here, nothing in rescale_to_metric.py's prim list.
+#
+# "pallet" ADDED 2026-09-09 on explicit request, WITH a known caveat that
+# chair/table/door did not have: tools/make_gt_maps.py's own SHELF_XY comment
+# describes "low pallets, boxes, rackshields" as geometry living INSIDE the
+# shelf racks (Shelf_0/1/2's own bboxes), i.e. exactly the same shelving
+# GDINO already falsely grounds "table"/"chair"/"cable" on at 0.09-0.24 --
+# unlike chair/table/door, this one was NOT confirmed as a freestanding prop
+# before adding. Live-checked right after adding: single-word "pallet" comes
+# back clean (no fragmentation), but scores sit right at the threshold edge
+# (0.36-0.38 vs box_threshold=0.35) -- notably higher than the old shelving
+# band (0.09-0.24) but not comfortably clear of it either. Left in place
+# since it's ambiguous, not clearly bad, but WATCH object_tracker's fused
+# confidence on any "pallet" track before trusting it; escalate via
+# min_confidence/min_hits (post-fusion, discriminates far better) before
+# touching this vocabulary again, same as everywhere else in this file.
+#
+# "box ." still NOT added even though "pallet" now is: unlike a pallet (a
+# real, if ambiguous, warehouse object), "box" is purely a description of the
+# same shelf clutter above -- adding it would not detect a new object type,
+# it would just give the existing false positive a second name.
+#
+# "rolling chair" ADDED then REVERTED same day (2026-09-09): tried as its own
+# two-word entry alongside plain "chair", exactly the fragmentation risk
+# flagged when it went in. Confirmed live within minutes, repeatedly, on both
+# the robot cam and the global cams: the SAME physical chair flip-flopped
+# frame to frame between class_id "chair" and class_id "chair rolling chair"
+# (the two entries' phrase spans merging into one, not "rolling" going its
+# own way as originally guessed) -- e.g. six consecutive robot-cam detections
+# split 3x "chair" / 3x "chair rolling chair" on what was one object. Neither
+# CLASS_BASE_RISK nor LABEL_CATEGORIES has a "chair rolling chair" key, so
+# every merged frame silently fell back to risk 0.40 / category "unknown"
+# (prior_unknown 0.3) instead of chair's 0.35 / furniture (prior_furniture
+# 0.1) -- worse than not distinguishing rolling chairs at all. Reverted to
+# plain "chair" only. The reasoning for not needing the split still holds:
+# object_tracker's per-track p_movable/p_motion belief already climbs on its
+# own for a chair actually observed rolling (risk_visualization.py's
+# LABEL_CATEGORIES comment keeps the unused "rolling chair" dict entries as
+# a documented dead end -- do not re-add this prompt word without a
+# different phrasing that GDINO won't merge with "chair").
+#
+# Also observed live, pre-existing and NOT touched by the above: "forklift"
+# and "cart" (both single words, both here well before 2026-09-09) merge the
+# same way into class_id "forklift cart" often enough to see in a few
+# seconds of traffic. Same silent-fallback consequence (0.40/unknown instead
+# of forklift's 0.95/wheeled or cart's 0.65/wheeled). This is a genuine,
+# older bug this session's traffic happened to surface, not something
+# introduced here -- flagging it rather than fixing it inline since it's a
+# separate design question (e.g. a merged-label parser in
+# risk_visualization.py, vs. never having two vocabulary entries that are
+# visually confusable adjacent in the prompt) that deserves its own decision.
+#
+# Verified/assigned label -> category/risk for every word below:
+#   person   -> person    0.90     forklift      -> wheeled   0.95
+#   robot    -> robot    (prior_robot 0.9)   cart          -> wheeled   0.65
+#   chair    -> furniture 0.35     table         -> furniture 0.40
+#   door     -> furniture 0.35     pallet        -> furniture 0.45
+prompt: "person . robot . forklift . cart . chair . table . door . pallet . "
+
+# Grazing-view guard, read by sim_global_cams.launch.py -> global_cam_projector.
+# Was 15.0 (~half the building's diagonal) -- monocular ground-plane
+# back-projection error grows with range/grazing angle (see
+# global_cam_projector_node.py's module docstring: "projects to a floor
+# point tens of metres away"), and 15 m still let far/shallow-angle
+# detections land meters outside the building walls ("floating objects",
+# 2026-09-10/11). Tightened to 10 m; the 3 overhead cameras are spread
+# across the floor so this should not open real coverage gaps, but watch
+# for it if a corner stops getting overhead detections.
+projector_max_range_m: 10.0
+
+# Per-key overrides for every global_cam_projector instance (applied after
+# risk_perception.yaml's global_cam_projector block; read by
+# sim_global_cams.launch.py). Self-exclusion in the sim: there is no tag-0
+# localizer here, so the gate uses AMCL's map->base_footprint. AMCL error plus
+# floor-projection smear from the ~24 deg overhead mounts puts the X3's own
+# detections 0.36-0.50 m from its believed centre (docs/probes_2026-09.md and
+# the 2026-09-08 baseline run: 23 self-tracks, all <= 0.50 m, with the lab's
+# 0.40 m tight radius). 0.60 m is still well inside anything nav2's lidar
+# layers own (a Carter at 0.6 m centre-to-centre is already a collision).
+projector_overrides:
+  self_exclusion_radius_m: 0.60
+  self_exclusion_robot_radius_m: 0.90
+
+cameras:
+  # Per camera:
+  #   name       (required)  drives every derived default below
+  #   prim_path  (required)  existing camera prim in the stage (user-placed)
+  # Optional overrides (derived from `name` when omitted):
+  #   frame_id:        <name>_optical_frame
+  #   image_topic:     /<name>/image_raw
+  #   info_topic:      /<name>/camera_info
+  #   graph_path:      /Root/GlobalCamGraph_<name>   (overridden below: this
+  #                    stage keeps its ROS graphs at the stage ROOT, next to
+  #                    /ClockGraph, /OdomGraph, /CarterGraphs)
+  #   extrinsic_yaml:  src/risk_perception/config/<name>_extrinsic_sim.yaml
+  #   inference_stride: 30   GDINO stride for this camera. Isaac renders
+  #                          ~30-60 fps vs the Pi's ~10, so 30 (~1-2 Hz of
+  #                          inference) matches the old stride-6-at-10fps
+  #                          budget; the costmap only updates at 5 Hz anyway.
+  - name: global_cam_mid
+    prim_path: /GlobalCameraMid       # (-2.94, -12.04, 3.88), looks +Y up the hall
+    graph_path: /GlobalCamGraph_mid
+  - name: global_cam_entry
+    prim_path: /GlobalCameraEntry     # (-5.22, 17.91, 3.19), looks -Y from the north wall
+    graph_path: /GlobalCamGraph_entry
+  - name: global_cam_exit
+    prim_path: /GlobalCameraExit      # ( 4.65, 17.88, 3.49), looks -Y from the north wall
+    graph_path: /GlobalCamGraph_exit
+
+# Warehouse-floor extent of /risk_costmap, in the map (= /Root) frame.
+# Launch passes these straight to risk_costmap_node, overriding the 10x10 m
+# lab defaults in risk_perception.yaml. Matches the exported static map
+# (warehouse/maps/warehouse_x3_nav.yaml: origin -10.4 -12.3, 397x607 @ 0.05 m
+# -> x [-10.4, 9.45], y [-12.3, 18.05]), at half that resolution.
+costmap:
+  resolution: 0.10
+  width_m: 20.0
+  height_m: 30.4
+  origin_x: -10.4   # map-frame x of the grid's lower-left corner
+  origin_y: -12.3

@@ -1,0 +1,11 @@
+# Unit-crossing scenario v2 (2026-09-10) -- pairs with warehouse/nav/carter_shuttle2.yaml.
+# A (east column, 1.2 m from lane 2's centre) <-> C' (west pocket at x = 1.0: 1.15 m
+# from lane 2's centre = ~0.9 m clearance from the Carter's body, 0.67 m from the
+# shelf face). Each A<->C' leg crosses carter2's shuttle lane once; with loop +
+# laps 6 that is 12 crossings. carter1 is parked 4.5 m south of the crossing.
+# Clearance: the whole aisle band x in [0.33, 4.03] at y = 0.5 is free floor
+# (warehouse_gt_x3.pgm); C' is 0.67 m from the nearest occupied cell.
+frame_id: map
+waypoints:
+  - {name: A, x: 3.40, y: 0.50, yaw: 3.1416}
+  - {name: C, x: 1.00, y: 0.50, yaw: 0.0}

@@ -1,0 +1,56 @@
+# Perception-stack Python dependencies for risk_perception / risk_map_publisher.
+#
+# This installs into a conda env that sits ON TOP of ROS 2 Humble, matching
+# env_perception.sh: `source /opt/ros/humble/setup.bash` first, then activate
+# this env. rclpy, sensor_msgs, vision_msgs, cv_bridge, tf2_ros, launch, etc.
+# are provided by the ROS 2 apt install, not pip -- do not add them here.
+#
+# Don't run this file directly -- use ./setup.sh, which installs these in
+# the right order:
+#   1. pip install -r requirements.txt          (this file)
+#   2. torch/torchvision, pinned to whatever CUDA toolkit setup.sh detects
+#      on the machine -- deliberately NOT listed here, see setup.sh
+#   3. pip install -r requirements-models.txt    (GroundingDINO + SAM2, need torch already installed)
+
+numpy==1.26.4
+opencv-python==4.9.0.80
+PyYAML==6.0.2
+ninja==1.13.0  # builds groundingdino's compiled CUDA op (_C.*.so)
+
+# --- colcon build tooling -------------------------------------------------
+# colcon lives IN this env on purpose. The apt-installed /usr/bin/colcon runs
+# under the system python3, so `colcon build` generates console_script
+# shebangs pointing at /usr/bin/python3 -- the nodes then start outside this
+# env and fail on `import torch`. Installing colcon here makes
+# `which colcon` -> $CONDA_PREFIX/bin/colcon and the shebangs
+# -> $CONDA_PREFIX/bin/python3.10. Always build with the env active.
+colcon-common-extensions==0.3.0
+catkin_pkg==1.1.0
+
+# colcon-core caps setuptools<80 for us, which is what keeps
+# `colcon build --symlink-install` (setup.py develop) working -- newer
+# setuptools drops it. Don't add an unpinned setuptools above this line.
+
+# empy 4.x changed the Interpreter API that ROS 2 Humble's rosidl generators
+# use; colcon pulls in 4.x unpinned. No package here generates messages today,
+# but pin the version Humble expects so adding one doesn't break the build.
+empy==3.3.4
+
+# --- tests ----------------------------------------------------------------
+# ament test packages (test_pep257.py, test_flake8.py, test_copyright.py).
+# pytest 7.x, not 6.2.5: colcon-core drags in pytest-cov/-rerunfailures, and
+# ROS's launch_pytest plus anyio's plugin are auto-loaded from entry points --
+# all of them need pytest>=7 and crash pytest at startup on 6.x.
+pytest==7.4.4
+pytest-cov==4.1.0
+pytest-rerunfailures==11.1.2
+
+# ament_flake8 / ament_pep257 import these from the ROS install but don't
+# vendor them; apt put them in the system python, which this env doesn't see.
+# Versions matched to what Humble ships.
+flake8==4.0.1
+pydocstyle==6.1.1
+
+# ROS 2's `launch` frontend parser imports lark; it gets loaded via the
+# launch_pytest plugin, so pytest won't even start without it.
+lark==1.1.1

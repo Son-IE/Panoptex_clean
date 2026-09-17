@@ -1,0 +1,409 @@
+# nav2 params for the X3 sim, BASELINE study arm (pure lidar nav2 -- no
+# Panoptex risk layer, no PredictedRisk critic, no speed governor).
+#
+# Derived from yahboomcar_ws/src/yahboomcar_nav/params/dwa_nav_params.yaml
+# (vendor DWB config -- left untouched) plus:
+#   - amcl block: warehouse/x3_sim/tests/amcl_tuned_params.yaml (tuned for the
+#     sim X3's A1 lidar + omni motion model).
+#   - DWB mecanum strafing (min/max_vel_y, vy_samples, acc/decel_lim_y) and the
+#     velocity_smoother block: yahboomcar_nav/params/exploration_nav_params_sim.yaml
+#     (the sim X3 is a true holonomic mecanum base).
+# See config/nav2_x3_panoptex.yaml for the risk-aware sibling; the two must
+# differ ONLY in the risk_layer/PredictedRisk/speed_limit_topic additions --
+# tools/check_arm_params.py enforces this and runs under colcon test.
+#
+# use_sim_time is True everywhere: this file is only ever launched against
+# Isaac Sim (x3_nav.launch.py asserts ROS_DOMAIN_ID=44 for exactly this
+# reason -- see the yahboomcar_ws sim contract note in the launch file).
+
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: scan
+    map_topic: map
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    # 12.0 / 0.15, not the tb3 vendor's 100.0 / -1.0: the sim RTX lidar mirrors
+    # the real A1 at 0.15-12 m.
+    laser_max_range: 12.0
+    laser_min_range: 0.15
+    laser_model_type: "likelihood_field"
+    max_beams: 180
+    max_particles: 2000
+    min_particles: 500
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    # Omni, not DifferentialMotionModel: the sim X3 is a true holonomic
+    # mecanum base and this waypoint loop has strafing-adjacent legs.
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.1
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.1
+    update_min_d: 0.1
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    # Baked spawn pose (same as risk_perception/config/amcl_sim.yaml): the sim
+    # X3 always starts at the stage spawn, so AMCL seeds itself and no manual
+    # /initialpose ("2D Pose Estimate") is needed before the first goal.
+    set_initial_pose: true
+    initial_pose:
+      x: 0.70
+      y: 0.05
+      z: 0.0
+      yaw: 0.0
+    always_reset_initial_pose: false
+
+amcl_map_client:
+  ros__parameters:
+    use_sim_time: True
+
+amcl_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: odom
+    default_bt_xml_filename: "navigate_to_pose_w_replanning_and_recovery.xml"
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+
+bt_navigator_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    controller_plugins: ["FollowPath"]
+
+    # DWB parameters
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      min_vel_x: 0.0
+      # min_vel_y/max_vel_y/vy_samples/acc_lim_y/decel_lim_y: strafing enabled
+      # -- the sim X3 is a true holonomic mecanum base (see
+      # exploration_nav_params_sim.yaml, which this is copied from).
+      min_vel_y: -0.26
+      max_vel_x: 0.26
+      max_vel_y: 0.26
+      max_vel_theta: 1.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.26
+      min_speed_theta: 0.0
+      # Add high threshold velocity for turtlebot 3 issue.
+      # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
+      acc_lim_x: 2.5
+      acc_lim_y: 2.5
+      acc_lim_theta: 0.5
+      decel_lim_x: -0.5
+      decel_lim_y: -2.5
+      decel_lim_theta: -0.5
+      vx_samples: 20
+      vy_samples: 5
+      vtheta_samples: 40
+      # sim_time/discretize_by_time/time_granularity/include_last_point: the
+      # PredictedRisk critic (panoptex arm) scores poses against a
+      # time-layered risk stack, so trajectories must actually be
+      # discretized by elapsed time, out to a horizon comparable to the
+      # critic's max_horizon_s (3.3s) -- kept identical here in baseline so
+      # the two arms plan over the same trajectory set.
+      sim_time: 3.0
+      discretize_by_time: true
+      time_granularity: 0.3
+      include_last_point: true
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+controller_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+# velocity_smoother is load-bearing: nav2_bringup's navigation_launch.py
+# remaps controller_server's cmd_vel -> cmd_vel_nav, then this node's
+# cmd_vel_nav -> cmd_vel. Drop it from the lifecycle and the robot stops
+# silently, with no error. y components enabled to match the DWB lateral
+# limits above (mecanum sim base).
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.26, 0.26, 1.0]
+    min_velocity: [-0.26, -0.26, -1.0]
+    max_accel: [2.5, 2.5, 3.2]
+    max_decel: [-2.5, -2.5, -3.2]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      robot_radius: 0.15
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.35
+        cost_scaling_factor: 5.0
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        # depth (WP5): the A1 lidar's scan plane sits at a fixed 0.11 m and
+        # misses low pallets/rack shields under it (map z-band vs. the single
+        # scan plane -- the shelf-stall trap in memory); RGB-D covers that gap.
+        observation_sources: scan depth
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          # Humble's real range keys, replacing the ROS1 raytrace_range key
+          # (silently ignored by nav2_costmap_2d::ObstacleLayer in Humble).
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 12.0
+          obstacle_min_range: 0.1
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+        depth:
+          topic: /camera/camera/depth/points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: True
+          min_obstacle_height: 0.05
+          max_obstacle_height: 0.60
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          expected_update_rate: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      always_send_full_costmap: True
+  local_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  local_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      robot_radius: 0.15
+      resolution: 0.05
+      # BASELINE arm: pure lidar costmap, no risk_layer. Compare to
+      # nav2_x3_panoptex.yaml's plugins list.
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          # Humble's real range keys, replacing the ROS1 raytrace_range key
+          # (silently ignored by nav2_costmap_2d::ObstacleLayer in Humble).
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 12.0
+          obstacle_min_range: 0.1
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.35
+      always_send_full_costmap: True
+  global_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  global_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: "yahboomcar.yaml"
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5000
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+planner_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+      spin_type: "SPIN_IN_PLACE"
+      rotation_velocity: 1.0
+      max_rotational_vel: 1.0
+      min_rotational_vel: 0.4
+      rotational_acc_lim: 3.2
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+      backup_speed: -0.2
+      backup_duration: 2.0
+      simulate_ahead_time: 2.0
+    wait:
+      plugin: "nav2_behaviors/Wait"
+      wait_duration: 5.0
+    global_frame: odom
+    robot_base_frame: base_footprint
+    transform_timeout: 0.1
+    use_sim_time: True
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: True
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      # waypoint_pause_duration is MILLISECONDS (nav2_waypoint_follower/plugins/
+      # wait_at_waypoint.hpp:72-73), so 200 = 0.2s. This is also nav2's own
+      # stock value. It reads alarming; it is not a bug, don't "fix" it.
+      waypoint_pause_duration: 200

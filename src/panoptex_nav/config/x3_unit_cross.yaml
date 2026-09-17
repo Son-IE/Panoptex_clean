@@ -1,0 +1,19 @@
+# WP-C unit-test scenario: two waypoints straddling carter1's patrol lane
+# (x = 1.32, see nav2_x3_panoptex.yaml / config/x3_sim_waypoints.yaml's own
+# lane-centre convention), so a `laps:=2` run of run_unit.sh forces 4 lane
+# crossings (A->C, C->A, A->C, C->A) in a short back-and-forth instead of
+# x3_sim_waypoints.yaml's full triangle. A and C are the same two points
+# Scenario v3's triangle already uses (wp_002/wp_003 in x3_sim_waypoints.yaml)
+# -- both clearance-checked there on 2026-09-09 (A (3.40,0.50): clearance
+# 0.600 m; C (0.65,0.50): clearance 0.350 m; both >=1.5 m from every static
+# person -- see that file's header for the full numbers), so no new
+# clearance check is needed here, just a shorter loop between them.
+#
+# Waypoint loop for x3_nav.launch.py's mission_supervisor node -- same
+# schema as config/x3_sim_waypoints.yaml (yahboomcar_ws's
+# default_waypoints.yaml format). Poses are in `frame_id` (map). yaw is
+# RADIANS.
+frame_id: map
+waypoints:
+  - {name: A, x: 3.40, y: 0.50, yaw: 3.1416}
+  - {name: C, x: 0.65, y: 0.50, yaw: 0.0}

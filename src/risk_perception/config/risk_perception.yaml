@@ -1,0 +1,1394 @@
+# risk_perception.yaml
+# All perception parameters in one place. Paths use $HOME expansion via the
+# launch file (ROS yaml does not expand ~ itself), so model paths are declared
+# as launch arguments instead and merged in there.
+#
+# -- Robot camera topic naming -----------------------------------------------
+# The robot-camera chain below is currently pointed at the Orbbec Astra Pro
+# Plus (astra_camera driver, single `camera` namespace). RealSense nests one
+# level deeper (`/camera/camera/...`) and exposes a pre-aligned depth stream.
+# To switch back to a RealSense, swap these four values -- no code changes:
+#
+#   gdino_detector.image_topic    -> /camera/camera/color/image_raw
+#   sam2_segmenter.image_topic    -> /camera/camera/color/image_raw
+#   rgbd_projector.depth_topic    -> /camera/camera/aligned_depth_to_color/image_raw
+#   rgbd_projector.camera_info_topic -> /camera/camera/color/camera_info
+#
+# The overhead global-cam chain further down is unaffected either way.
+
+gdino_detector:
+  ros__parameters:
+    image_topic: /camera/camera/color/image_raw
+    # Robot-camera chain, used by BOTH the lab and the sim (panoptex_sim runs
+    # this same block -- there is no sim-specific override for the robot cam
+    # the way global_cams_sim.yaml overrides the overhead one), so this value
+    # is deliberately left as-is rather than taking user-a/sandbox's trimmed
+    # "person . robot . cart . chair . table . monitor . " (2026-09-11 merge:
+    # her prompt edits were not in the merge recipe, so ours wins). Her two
+    # arguments still stand and are worth revisiting deliberately:
+    #   * "ground mobile robot" fragments into separate labels/tracks (see
+    #     global_cams_sim.yaml's long note) -- though gdino_detector_node's
+    #     new `collapse_compound_labels` now handles that downstream.
+    #   * "cable" is rated 0.85 in CLASS_BASE_RISK and grounds on shelf edges
+    #     and yellow floor tape -- near-maximum risk from a false positive.
+    prompt: "person . ground mobile robot . cart . chair . table . monitor . camera . cable . "
+    # Robot-camera chain. Kept in step with gdino_detector_global above; this
+    # one sees things close up, so its scores run higher anyway.
+    box_threshold: 0.35
+    text_threshold: 0.25
+    inference_stride: 3
+    device: cuda
+    # Relation prior (proposed) -- off by default (empty = no relation
+    # phrases, identical behavior to before this existed). Appended to
+    # `prompt` and run as ONE combined GDINO call; see gdino_detector_node.py
+    # and the relation-prior plan for the matching/tagging design and the
+    # open question of whether combining hurts either phrase type's quality.
+    relation_prompt: ""
+    relation_iou_threshold: 0.15
+    # GDINO has no NMS built in -- see nms.py's docstring. 0.5 is the
+    # conventional default.
+    nms_iou_threshold: 0.5
+
+# global_cam.launch.py names this instance's node "gdino_detector_global", not
+# "gdino_detector" -- ROS 2 matches yaml parameter blocks by node name, so
+# without ITS OWN block here it silently falls back to gdino_detector_node.py's
+# code-level default prompt ("person . chair . monitor . table . mobile robot .",
+# missing cart/camera/cable and differently worded), not the block above.
+# image_topic/config_path/checkpoint_path/inference_stride are already
+# overridden inline in global_cam.launch.py, so only what's missing is here.
+gdino_detector_global:
+  ros__parameters:
+    # The REAL LAB overhead camera's vocabulary; the sim overrides this
+    # wholesale from global_cams_sim.yaml (which does use single-word
+    # entries only -- see its long note on why multi-word entries fragment
+    # into separate labels, separate tracks and a lost consequence
+    # category). user-a/sandbox trimmed this one to match; not taken here
+    # (not in the 2026-09-11 merge recipe), so the lab value is unchanged.
+    prompt: "person . ground mobile robot . cart . chair . table . monitor . camera . cable . "
+    # 0.35, set from the sim's measured score distribution: real people ground
+    # at 0.43-0.78, while the warehouse SHELVING grounds as "table"/"chair"/
+    # "cable" at 0.09-0.24. Anything below ~0.3 floods the tracker with static
+    # shelf furniture -- an earlier 0.20 was tried to rescue distant
+    # detections and did the opposite: the junk came back, not the people,
+    # who already clear 0.35 at 648x486.
+    #
+    # KNOWN COST: forklifts and the Nova Carters ground as "ground mobile
+    # robot forklift" at only ~0.18-0.19 here, so this DROPS them. If the
+    # Carters have to be tracked as moving obstacles, do not just lower this
+    # -- the shelving comes back with them. Prefer:
+    #   * a tighter prompt (drop "table . chair . cable"; that is what the
+    #     shelving latches onto), or
+    #   * object_tracker's min_confidence / min_hits, which filter AFTER
+    #     multi-camera fusion and discriminate far better than a per-frame cut.
+    #
+    # THIS is the value the sim uses -- sim_global_cams.launch.py passes this
+    # block explicitly, overriding gdino_detector_node.py's code default.
+    box_threshold: 0.35
+    text_threshold: 0.25
+    relation_prompt: ""
+    relation_iou_threshold: 0.15
+    nms_iou_threshold: 0.5
+
+sam2_segmenter:
+  ros__parameters:
+    image_topic: /camera/camera/color/image_raw
+    detections_topic: /risk_perception/detections_2d
+    mask_topic: /risk_perception/instance_mask
+    segmentation_image_topic: /risk_perception/segmentation_image
+    model_config: "configs/sam2.1/sam2.1_hiera_s.yaml"
+    device: cuda
+    image_cache_size: 120
+    overlay_alpha: 0.45
+
+rgbd_projector:
+  ros__parameters:
+    # Astra has no separate "aligned_depth_to_color" topic -- alignment is done
+    # in the driver instead, so this must be launched with
+    # depth_registration:=true or these pixels are in the DEPTH sensor's frame
+    # while the masks are in the COLOR sensor's (25 mm apart, different fx).
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    detections_topic: /risk_perception/detections_2d
+    mask_topic: /risk_perception/instance_mask
+    output_topic: /risk_perception/detections_3d
+    depth_scale: 0.001
+    min_depth_m: 0.20
+    max_depth_m: 8.0
+    sync_tolerance_sec: 0.05
+    cache_size: 180
+    max_points_per_instance: 5000
+    mask_erosion_pixels: 3
+    # Relation prior (geometric) -- person-mask-inside-machine-mask
+    # containment, replacing gdino_detector's relation_prompt language
+    # grounding below (found empirically to parse per-noun rather than a
+    # bound relation). Unvalidated defaults -- see the relation-prior
+    # playbook's Tier 0 static-image harness before trusting these on real
+    # data.
+    relation_containment_threshold: 0.6
+    relation_dilate_px: 5
+    relation_max_distance_m: 2.5
+
+map_frame_projector:
+  ros__parameters:
+    input_topic: /risk_perception/detections_3d
+    output_topic: /risk_perception/detections_3d_map
+    marker_topic: /risk_perception/map_markers
+    target_frame: map
+    transform_timeout_sec: 0.25
+    marker_lifetime_sec: 1.0
+
+risk_costmap_node:
+  ros__parameters:
+    # Consumes the tracker's confirmed, fused world model (stable identity,
+    # covariance, per-class semantic decay) rather than raw per-frame
+    # detections -- see object_tracker_node.py.
+    input_topic: /risk_perception/world_objects
+    output_topic: /risk_costmap
+    map_frame: map
+    resolution: 0.10
+    width_m: 10.0
+    height_m: 10.0
+    origin_x: -5.0
+    origin_y: -5.0
+    # alpha 0.90 (the old default) decays so gently that on a 10cm grid it
+    # takes 2.2-3.7m for any object's risk to clear min_risk -- a dozen
+    # objects in a room then paint wall-to-wall risk. 0.25 keeps the graded
+    # falloff within a few tens of cm of each object's footprint, matching
+    # the module docstring's intent. See risk_costmap_node.py's docstring.
+    # alpha 0.25 / cap 0.30 m produced a risk halo that died at 0.30 m -- i.e.
+    # entirely INSIDE global_costmap's inflation_radius (0.35 m). Since
+    # risk_layer.cpp does master.setCost(max(current, risk)) and max_cost (200)
+    # is below inflation's inscribed cost (253), the risk field lost that max()
+    # at every cell and had literally ZERO effect on any plan around a
+    # lidar-visible object. Measured profile before/after is in the commit
+    # message; at 0.4 m the old field contributed 0 against inflation 0, the
+    # new one contributes 108.
+    #
+    # alpha 0.88 / cap 1.50 m puts graded risk from 0.4 m (just outside
+    # inflation) out to 1.5 m, which is the band NavFn can actually route
+    # around. The module docstring warns that alpha 0.90 fills a room with
+    # risk -- that was written BEFORE max_falloff_radius_m existed and is
+    # exactly what the cap now prevents: the halo is bounded at 1.5 m
+    # regardless of how gently alpha decays. Do not raise the cap without
+    # re-reading that docstring; a 3 m halo per object WILL merge into
+    # wall-to-wall risk in a warehouse aisle.
+    #
+    # These two are the main knob for "how far does the robot give way",
+    # so they are an experiment parameter, not a fixed constant -- record
+    # whatever value an ablation run used.
+    alpha: 0.88
+    min_risk: 0.02
+    publish_rate: 5.0
+    footprint_pad: 0.05
+    # Hard cap, independent of alpha/min_risk -- see risk_costmap_node.py.
+    max_falloff_radius_m: 1.50
+
+# Stage 2 (prediction) + 3 (rasterization) + 4 (consequence, relative motion).
+# Publishes to /risk_costmap_predictive, a DIFFERENT topic from the reactive
+# risk_costmap_node above, so both can run at once and be compared -- that
+# pairing is the ablation. To let Nav2 plan against this one instead, repoint
+# `risk_layer.topic` in dwa_nav_params.yaml; never make both nodes publish
+# the same topic.
+predictive_risk_costmap_node:
+  ros__parameters:
+    input_topic: /risk_perception/world_objects
+    costmap_topic: /risk_costmap_predictive
+    marker_topic: /risk_perception/prediction_markers
+    map_frame: map
+    resolution: 0.10
+    # MUST stay identical to spatial_prior_node's geometry block below.
+    # The per-category /risk_perception/spatial_flow/* topics are plain
+    # sensor_msgs/Image with no resolution/origin to resample from, so
+    # _flow_cb drops every update on a dimension mismatch -- unlike the
+    # OccupancyGrid spatial_prior topic, which _prior_cb does resample.
+    # Widened 10x10 @ (-5,-5) -> 12x12 @ (-6,-6) to match spatial_prior_node
+    # (which moved there in 08813e7 while this block was left behind).
+    # risk_costmap_node keeps 10x10: it consumes no flow topic.
+    width_m: 12.0
+    height_m: 12.0
+    origin_x: -6.0
+    origin_y: -6.0
+    horizon_steps: 20        # 0-6 s at pred_dt 0.3 (21 layers), matches the MPPI horizon
+    pred_dt: 0.3
+    gamma: 0.9
+    vel_inflation: 0.05
+    # 0.15 -> 0.25 (2026-09-13): the raw-exposure metric samples severity at
+    # the robot's exact (x,y) -- at 0.15 m floor, anything more than ~1 sigma
+    # (a normal "close but not touching" encounter, 0.3-1 m) reads as
+    # numerically ~0 (see the complex_forklift_predictive_rep1 investigation:
+    # 95% of samples read exactly 0.0 despite clearance_min_m as low as
+    # 0.01-0.3 m in the same run). Widened modestly, not dramatically --
+    # this also widens what Nav2 itself avoids, not just what gets scored.
+    min_sigma_m: 0.25
+    # Ceiling on spatial spread, and a separate ceiling on the velocity
+    # covariance that feeds it (2026-09-10 "SRM fills half the map with
+    # real perception" finding, root cause 1 -- see
+    # predictive_risk_costmap_node.py's module docstring and paint_track's
+    # own docstring): object_tracker_node seeds a freshly spawned track's
+    # Pvx/Pvy at 1.0 (m/s)^2, the KALMAN FILTER'S OWN PRIOR, not evidence
+    # -- at t=6s (this stack's far horizon) that prior alone inflated
+    # sigma to ~6 m. sigma_v_max_mps clamps the prior before it feeds the
+    # rollout's t^2 term; max_sigma_m is a second, independent backstop on
+    # the resulting spread in every layer (grid AND stack, both
+    # hypotheses). min_sigma_m above is untouched.
+    sigma_v_max_mps: 0.5
+    # 0.6 -> 0.9 (2026-09-13), same reasoning as min_sigma_m above -- kept
+    # well under the original pre-bd66d0d 1.5 m ceiling this was tightened
+    # from, so the "SRM fills half the map" regression that motivated 0.6
+    # doesn't come back.
+    max_sigma_m: 0.9
+    publish_rate: 5.0
+    # Stage 4a -- severity by class, from risk_visualization.CLASS_BASE_RISK
+    # (person 0.90, cart 0.65, monitor 0.20). false = every class weighs 1.0,
+    # which is the (a) arm of the consequence ablation.
+    use_class_consequence: true
+    consequence_default: 0.40
+    # Young-track gate (same 2026-09-10 finding, root cause 3 -- see
+    # is_track_mature()'s docstring): a track below EITHER threshold has
+    # its pmot treated as 0 for painting (stationary-only), both grid and
+    # stack -- its motion belief is the tracker's own freshly-seeded
+    # prior, not yet evidence. Read from the tracker's class_id
+    # "hits="/"age=" fields (object_tracker_node's WP-B addition); a
+    # class_id with neither key (gt_tracks_node's oracle tracks,
+    # perception:=oracle, or any older publisher) reads as mature
+    # unconditionally, so oracle runs are unaffected.
+    min_track_age_for_motion_sec: 1.0
+    min_hits_for_motion: 5
+    # Per-category |v| plausibility cap (same finding, root cause 2): an
+    # association jump mid-track hands a track an implausible velocity
+    # that then gets painted as a mover at that speed. A track above its
+    # category's cap is also painted stationary-only, logged once per
+    # track id. Keyed by risk_visualization.label_category();
+    # max_speed_unknown_mps is the cap the unknown-but-moving exception
+    # below uses (WP-A, 2026-09-11: the general "no entry for this
+    # category" fallback is now max_speed_default_mps below, since
+    # stack_motion_first paints every category -- max_speed_unknown_mps
+    # stays reserved for that stricter, class-blind exception path only).
+    max_speed_person_mps: 2.0
+    max_speed_robot_mps: 1.5
+    max_speed_wheeled_mps: 2.0
+    max_speed_unknown_mps: 1.2
+    # speed_cap_for_category's fallback for any category with no entry
+    # above (furniture, unknown, ...), now that stack_motion_first paints
+    # every category. NOT max_speed_unknown_mps -- see that param's own
+    # comment just above.
+    max_speed_default_mps: 2.0
+    # 2026-09-10 evening: a track can pass is_track_mature and its
+    # category's speed cap above and still be reading pure camera jitter
+    # as "motion" -- a few cm/s, nowhere near any cap. gt_tracks_node's
+    # oracle classify_motion already only sets pmot=1 at speed >= 0.15 m/s
+    # (its own motion_speed_mps), so gating painting at the SAME floor
+    # here (resolve_moving_allowed's "below_min_speed" reason) makes real
+    # and oracle perception agree on "how slow is stationary" and does not
+    # regress oracle -- an oracle track never carries pmot=1 below that
+    # speed in the first place.
+    min_speed_for_motion_mps: 0.15
+    # Stage 4b -- CPA/TTC amplification against the robot's own motion.
+    # factor = 1 + cpa_gain * exp(-d_cpa/cpa_scale_m) * exp(-t_cpa/ttc_scale_s),
+    # exactly 1.0 for diverging or relatively-static tracks, so switching this
+    # off must reproduce the Stage 2+3 costmap bit for bit. That is the
+    # relative-velocity ablation.
+    enable_relative_motion: true
+    odom_topic: /odom
+    base_frame: base_footprint
+    # max factor = 1 + cpa_gain. bd66d0d (2026-09-11) set this to 0.5 to fix
+    # every class with base risk >= ~0.40 saturating to the same solid red
+    # on a closing encounter (see that commit's message); the 2026-09-11
+    # merge reverted it back to 1.5. 0.8 here (2026-09-12) is a middle
+    # ground between that fix and the reverted value -- max 1.8x, so classes
+    # up to ~0.56 base risk stay below saturation at max closing while person
+    # (0.90)/forklift (0.95) still saturate on a direct approach.
+    cpa_gain: 0.8
+    cpa_scale_m: 0.6
+    ttc_scale_s: 3.0
+    min_rel_speed: 0.05
+    odom_timeout_sec: 1.0
+    tf_timeout_sec: 0.1
+    publish_cpa_markers: true
+    # Two-hypothesis CPA (ablation knob, 2026-09-12): off reproduces the
+    # historical behaviour bit for bit -- ONE cpa_gain/cpa_scale_m/ttc_scale_s
+    # reading (against the track's raw vx/vy) reused for BOTH the stationary
+    # and moving hypotheses' severity. On computes it TWICE, once with
+    # v_obj=0 for the stationary hypothesis and once with the track's own
+    # (vx, vy) for the moving one, so an uncertain track (pmot near 0.5)
+    # cannot have its real "parked in the robot's path" risk diluted by a
+    # safe "moving away" reading sharing the same encounter geometry. See
+    # predictive_risk_costmap_node.py's module docstring, STAGE 4.
+    # ON as of 2026-09-13 (paper default): the stationary hypothesis is
+    # scored against geometry that does not depend on the track's
+    # estimated velocity at all, so a bad velocity (calibration offset,
+    # association jump, revived track) can only shift MASS between two
+    # independently-correct severities instead of diluting both at once.
+    # false reproduces the historical single-reading behaviour bit for
+    # bit and is the ablation arm.
+    two_hypothesis_cpa: true
+    # Persistent place prior as a weak floor. 0.0 = off (default: turn it on
+    # only once spatial_prior_node has actually learned something, or the
+    # costmap gains a uniform zero-information offset).
+    spatial_prior_topic: /risk_perception/spatial_prior
+    # 0.15 as of 2026-09-13 (paper default). Deliberately subordinate to
+    # any real detection: a fully saturated lane cell (S = 1.0) reads a
+    # floor of 0.15, i.e. Nav2 cost 30 of nav2_risk_layer's max_cost 200,
+    # against 150 for a track painting at the agnostic 0.75. That is
+    # enough to break a tie between two otherwise equal-cost routes and
+    # not enough to route around anything on its own -- and it stays
+    # below srm_levels[0] (0.2), the same bound activity_weight is held
+    # to. ONLY meaningful with a warmed, frozen prior loaded (see
+    # spatial_prior_node.persist_path / is_frozen below); against an
+    # empty prior this is a uniform zero-information offset.
+    spatial_prior_weight: 0.15
+    # Spatial-Flow rollout blend -- a DIFFERENT consumption of
+    # spatial_prior_node's output than the floor above (see
+    # predictive_risk_costmap_node.py's module docstring): reshapes STAGE 2b
+    # itself using each track's own category's learned heading, rather than
+    # adding a floor. 0.0 = off (default: this changes what shape Nav2
+    # plans against, not just an additive offset, so it must be turned on
+    # deliberately, once the Spatial-Flow prior has real data to offer).
+    # flow_categories must match spatial_prior_node's own flow_categories --
+    # this node subscribes to exactly that fixed set at startup.
+    flow_categories: ["person", "robot", "wheeled"]
+    # 0.30 as of 2026-09-13 (paper default), deliberately BELOW the
+    # planner grid's own planner_flow_blend_weight (0.5): the grid Nav2's
+    # costmap layer reads stays near-pure constant-velocity, and only the
+    # slower route/tactical layer leans harder on the learned heading.
+    # blend_velocity() scales this by (step+1)/horizon_steps AND by the
+    # cell's own S, so at step 0 the blend is ~0.015 and only the 6 s far
+    # horizon on a saturated lane cell reaches the full 0.30 -- the prior
+    # is consulted exactly where constant-velocity is least trustworthy.
+    # A cell with no deposit history contributes nothing at any weight.
+    flow_blend_weight: 0.30
+    # Redirect robot/wheeled onto spatial_prior_node's merged
+    # /risk_perception/spatial_flow/robot_group channel (its flow_groups
+    # default) instead of their own per-category topics -- the tracker's
+    # association_groups fuses the two into one identity group, so a
+    # mislabeled Carter's evidence can land under either label depending
+    # on which one it wore that instant; the merged channel already
+    # carries whichever member has the stronger S per cell. A category
+    # absent from this map keeps sampling its own channel (e.g. "person").
+    # Applies to both flow_blend_weight above and
+    # planner_flow_blend_weight below. See
+    # predictive_risk_costmap_node.resolve_flow_channel.
+    flow_category_map: ["robot:robot_group", "wheeled:robot_group"]
+    # STAGE 5 -- time-layered stack for panoptex_nav's PredictedRiskCritic
+    # (panoptex_msgs/RiskStack on stack_topic). Layer k = k * pred_dt ahead;
+    # no CPA factor, no gamma discount (the DWB critic supplies both from the
+    # candidate trajectory itself). Values here are the node defaults.
+    stack_topic: /risk_stack
+    publish_stack: true
+    extrapolate_to_now: true       # roll the moving hypothesis forward by track age
+    max_track_age_sec: 3.0
+    stack_consequence_mode: class  # CLASS_BASE_RISK[label], not x decayed confidence
+    stack_min_track_score: 0.1
+    use_object_extent: true        # widen splats by the track's bbox half-extent
+    extent_cap_person_m: 0.30      # half-extent caps per category (bbox is unreliable)
+    extent_cap_robot_m: 0.45
+    extent_cap_wheeled_m: 0.50
+    extent_cap_other_m: 0.25
+    stack_categories: ["person", "robot", "wheeled"]   # furniture/unknown: lidar's job
+    # Unknown-but-moving exception to stack_categories above -- a
+    # category=="unknown" track (e.g. a lidar-cluster detector's unmatched
+    # detection) that is genuinely MOVING AND mature/plausible enough
+    # (hits/age/speed gates below) still paints the stack, at a flat
+    # magnitude since it has no class to price by CLASS_BASE_RISK. A
+    # STATIC unknown stays excluded. Default flipped true -> false and
+    # unknown_moving_pmot_min raised 0.5 -> 0.8 (2026-09-10 "SRM fills half
+    # the map with real perception" finding): a lidar-only track has no
+    # class to sanity-check its motion belief against, so this is now an
+    # opt-in exception with a much stricter bar, not an always-on one. See
+    # predictive_risk_costmap_node.py's module docstring and
+    # resolve_stack_consequence().
+    stack_paint_unknown_moving: false
+    unknown_moving_risk: 0.60
+    unknown_moving_pmot_min: 0.8
+    # Same 2026-09-10 finding -- additional gates required (alongside
+    # pmot) whenever stack_paint_unknown_moving is turned on: enough
+    # measurement hits, enough age, and a plausible speed for an
+    # UNKNOWN-category track (max_speed_unknown_mps above), mirroring the
+    # general young-track gate but stricter, since this path has no class
+    # at all to price consequence by.
+    unknown_moving_min_hits: 8
+    unknown_moving_min_age_sec: 2.0
+    # WP-A -- class-agnostic (motion-first) consequence, 2026-09-11. Thomas
+    # et al. 2021's own framing: the stack does not grade risk by NOUN at
+    # all -- a "table", a "forklift" and a "mobile robot" are all just
+    # "dynamic"/"movable" occupancy. ON by default: stack_categories above
+    # stops gating the stack, the collapsed grid (/risk_costmap_predictive)
+    # AND the planner grid (/risk_costmap_planner) alike -- every
+    # confirmed, sufficiently confident track paints all three regardless
+    # of its class label. false restores the pre-2026-09-11 category-gated
+    # behaviour (a regression/ablation knob, not the shipped default).
+    stack_motion_first: true
+    # The flat consequence every track paints under stack_motion_first.
+    # 0.75 sits between the old "wheeled" (0.65) and "person" (0.90) class
+    # values: high enough that a parked mover is a real keep-out, not so
+    # high a chair reads as lethal as a forklift.
+    stack_consequence_agnostic: 0.75
+    # OFF by default: the class-keyed semantic prior (CLASS_BASE_RISK) may
+    # only push the agnostic value UP -- max(agnostic, class_value) -- never
+    # veto or lower it. The noun stays an optional refinement, never
+    # load-bearing for whether a track paints at all.
+    # TRUE as of 2026-09-13 (paper default): max(agnostic, class_value),
+    # so the Semantic prior may only RAISE the class-agnostic 0.75 --
+    # person 0.90 and forklift 0.95 price above a generic mover, cart
+    # (0.65)/chair (0.35)/monitor (0.20) are floored at 0.75 rather than
+    # discounted. Never a veto, never a reduction. false (the class value
+    # discarded entirely) is the ablation arm.
+    semantic_modifier_enabled: true
+    # Additional gate on the MOVING hypothesis specifically (grid, stack
+    # AND planner grid alike): a track that is mature/plausible but whose
+    # own pmot still reads "probably stationary" paints only its
+    # stationary blob, at the agnostic consequence -- motion-first prices
+    # every category, it does not assume every track is moving.
+    # Raised 0.5 -> 0.8 (2026-09-12): a real (non-sim) camera run showed
+    # multi-sensor misalignment/jitter occasionally spiking a genuinely
+    # static track's p_motion enough to paint a predicted-path comet and
+    # an SRM layer on it. p_motion decays fast (p_motion_decay 3.0/s,
+    # half-life ~0.23s) after a single spurious "moving" tick, so raising
+    # this gate mostly shortens how many ticks that spike stays above
+    # threshold (0.23s window at 0.5 vs. 0.074s at 0.8) without touching a
+    # genuinely continuous mover, which keeps re-triggering "moving" every
+    # tick and sits pinned near 1.0 regardless. Matches
+    # unknown_moving_pmot_min above, tuned for the same reason on
+    # 2026-09-10. If this starts painting real slow/intermittent movers as
+    # stationary-only, retune motion_disp_k_sigma / motion_min_
+    # displacement_m in the object_tracker section instead -- those fix
+    # the phantom p_motion at its source.
+    stack_moving_pmot_min: 0.8
+    # Companion gate on pmov (p_movable) -- object_tracker's SLOW,
+    # class-seeded "could this ever move" belief, as opposed to
+    # stack_moving_pmot_min's instant "is it moving now" evidence. 0.0 = off
+    # (pmov is always >= 0.0). Raise this instead of stack_moving_pmot_min
+    # if a specific class keeps false-triggering the moving hypothesis --
+    # see predictive_risk_costmap_node.py's declare_parameter comment.
+    # 0.4 as of 2026-09-13 (paper default). Chosen against the prior_*
+    # seeds in object_tracker below: person/robot (0.9) and wheeled (0.7)
+    # clear it immediately, while furniture (0.1) needs ~0.8 s and unknown
+    # (0.3) ~0.3 s of CONTINUOUSLY observed motion at movable_gain 0.5 to
+    # climb past it. So a shelf edge or a lidar_cluster ghost cannot paint
+    # a moving hypothesis off a single-frame pmot spike, while a genuine
+    # mover is unaffected. Decay back below 0.4 takes ~110 s at
+    # movable_decay 0.01, which matches mover_demote_s (60 s) in spirit:
+    # a mover that parks stays eligible rather than flickering out.
+    # Loosened 0.4 -> 0.2 (2026-09-13) as part of widening the whole risk
+    # response (see min_sigma_m/max_sigma_m above) -- person/robot (0.9) and
+    # wheeled (0.7) still clear it instantly either way, this only shortens
+    # how long furniture (0.1) and unknown (0.3) need to accumulate
+    # continuously-observed motion before their moving hypothesis paints
+    # (furniture: ~0.8s -> ~0.4s at movable_gain 0.5; unknown: ~0.3s ->
+    # ~0.1s). Do NOT drop this all the way to 0.0 -- that's the exact
+    # "SRM fills half the map" ghost-painting regression stack_moving_pmot_min
+    # and this gate were both added to fix (2026-09-10); a single-frame pmot
+    # spike from a shelf edge or lidar ghost must still fail this.
+    stack_moving_pmov_min: 0.2
+    # Relation prior ON/OFF at the single point it enters severity
+    # (combine_severity's additive term). true = shipped behaviour. Needed
+    # because the geometric relation evidence is produced unconditionally
+    # by BOTH projectors and by object_tracker -- without this parameter
+    # there was no reproducible "relation disabled" arm at all. false still
+    # logs relbonus to the research CSV, it just does not paint.
+    use_relation_bonus: true
+    # Semantic keep-out floor -- a LOWER bound on the splat half-extent,
+    # combined with the extent_cap_* upper bounds above (see
+    # resolve_extent_half()/select_min_extent()): applies to the stack AND
+    # both collapsed grids (/risk_costmap_predictive and
+    # /risk_costmap_planner). "forklift" matches the raw LABEL, not just
+    # its "wheeled" category, so it gets its own, bigger floor -- bigger
+    # than the wheeled cap by design; the floor wins when it exceeds the cap.
+    min_extent_person_m: 0.50
+    min_extent_robot_m: 0.45
+    min_extent_wheeled_m: 0.45
+    min_extent_forklift_m: 0.80
+    min_extent_other_m: 0.25
+    # STAGE 6 -- planner grid (route/tactical layer). A second collapsed
+    # OccupancyGrid, published alongside /risk_costmap_predictive each
+    # tick: farther-seeing (planner_horizon_steps), slower-fading
+    # (planner_gamma close to 1.0), flow-blended toward the learned
+    # Spatial-Flow heading (planner_flow_blend_weight) independently of
+    # gamma/flow_blend_weight above, which stay pure constant-velocity for
+    # the stack and /risk_costmap_predictive. EGO-INDEPENDENT like the
+    # stack -- no CPA factor.
+    publish_planner_grid: true
+    planner_topic: /risk_costmap_planner
+    planner_horizon_steps: 20
+    planner_gamma: 0.97
+    planner_flow_blend_weight: 0.5
+    # WP-A -- Spatiotemporal Risk Map (SRM). Converts the STAGE 5 stack
+    # (already exactly a SOGM -- a time-layered occupancy field) into a
+    # risk field that falls off LINEARLY with distance to occupied space,
+    # per Thomas, Piat & Charpillet, "Learning Spatiotemporal Occupancy
+    # Grid Maps for Efficient Decision-Making" (2021), eq. 3:
+    #   risk(i) = max(0, 1 - d(i)/d0)
+    # d0 = srm_d0_m below is their own value. See
+    # risk_perception/srm.py's stack_to_srm() for the exact per-level,
+    # max-combined formula (their p=3 p-norm across occupied cells,
+    # approximated) and predictive_risk_costmap_node.py's module docstring
+    # WP-A section for how this node windows/publishes it.
+    publish_srm: true
+    srm_topic: /risk_stack_srm
+    srm_now_topic: /risk_srm_now
+    srm_marker_topic: /risk_perception/srm_markers
+    srm_d0_m: 1.5           # eq. 3's d0: distance at which risk reaches 0
+    # Occupancy probability thresholds combined by max() per layer (see
+    # srm.py docstring) -- a cell whose stack value equals one of these
+    # peaks at exactly that level, not 1.0 (level-graded, not binary).
+    srm_levels: [0.2, 0.5, 0.8]
+    # Side of the robot-centred window the SRM is computed over -- bounds
+    # the per-tick distance-transform cost independently of width_m/
+    # height_m, and matches the paper's own local, robot-centred framing.
+    srm_window_m: 12.0
+    # "Comet" marker cutoff -- only cells >= this SRM value get a point in
+    # srm_marker_topic's per-layer MarkerArray. Applies to layer 0 ("now")
+    # only as of 2026-09-10 -- see srm_marker_delta below.
+    srm_marker_min: 0.3
+    # Comet-vs-parked-disc fix (2026-09-10 finding): the stationary
+    # hypothesis is splatted into every stack layer, so a parked object's
+    # SRM layer k equals layer 0 -- without this, every layer drew that as
+    # a full time-coloured "moving" point, same as a genuine mover. Layers
+    # k>=1 now additionally require srm[k] - srm[0] >= srm_marker_delta,
+    # so only a cell whose PREDICTED motion pushes it meaningfully above
+    # "now" gets a time-coloured point at all. Raised 0.05 -> 0.15
+    # (2026-09-10 evening): 0.05 let two near-zero SRM values (a
+    # barely-warm cell trailing a barely-warmer one) clear the gate --
+    # 0.15 is a real absolute floor on "how much above now," not just "not
+    # exactly equal to now."
+    srm_marker_delta: 0.15
+    # 2026-09-10 evening: only draw comet layers k>=1 every Nth layer
+    # (k % srm_marker_layer_stride == 0; k==0 "now" is always drawn
+    # regardless). With the default horizon_steps=20/pred_dt=0.3 the stack
+    # has 21 layers -- drawing every one stacked 21 translucent MarkerArray
+    # layers on top of each other in RViz, and even a barely-over-threshold
+    # cell's tail looked solid where several low-alpha layers overlapped.
+    # stride=3 thins that to 7 drawn layers (0, 3, 6, ..., 18) without
+    # changing which cells qualify within a layer that IS drawn -- see
+    # srm_marker_mask()/predictive_risk_costmap_node.py's module docstring.
+    srm_marker_layer_stride: 3
+    # WP-C -- class-agnostic recent-activity floor, 2026-09-11
+    # (spatial_prior_node's /risk_perception/activity_prior: a 5-min
+    # half-life EMA of any mover, no category channels -- keeps decaying
+    # even while the lifelong prior above is frozen for a study run, since
+    # it is run-time state, not a learned prior, and is never saved). See
+    # module docstring's "WP-C -- CLASS-AGNOSTIC RECENT-ACTIVITY FLOOR"
+    # section. Seeds every grid this node publishes by MAX before any
+    # track is painted, never addition -- a track's own painted core on a
+    # busy cell keeps its own value; only an otherwise-empty cell is
+    # raised. No double counting with lane_layer: nav2's global costmap
+    # already max-merges every risk layer it carries.
+    activity_topic: /risk_perception/activity_prior
+    # The STACK's own weight, bounded <= srm_levels[0] + 0.05 by design
+    # (0.25 against srm_levels[0]'s own 0.2): an empty cell's activity
+    # floor should only ever reach about the SRM's lowest graded level,
+    # never read like a real detection.
+    activity_weight: 0.0
+    # The planner grid's own weight -- independent of activity_weight
+    # above, same reasoning as planner_flow_blend_weight/flow_blend_weight.
+    activity_weight_planner: 0.0
+    # Deliberately lower than the two above: /risk_costmap_predictive
+    # already carries every track's own CPA-amplified peak AND (when
+    # spatial_prior_weight is on) the learned lane floor; a smaller grid
+    # weight avoids stacking a second, redundant floor on the one grid
+    # Nav2's DWB critic reads directly.
+    activity_weight_grid: 0.0
+
+# The place-indexed half of the world model: where have things been observed
+# MOVING, accumulated across sessions. Standalone -- it only reads the
+# tracker's output and publishes a grid, so it can run against a bag with no
+# robot, no Nav2 and no cameras attached.
+spatial_prior_node:
+  ros__parameters:
+    input_topic: /risk_perception/world_objects
+    output_topic: /risk_perception/spatial_prior
+    map_frame: map
+    # MUST match predictive_risk_costmap_node's geometry exactly. The
+    # OccupancyGrid-based /risk_perception/spatial_prior topic resamples if
+    # they differ, but the per-category /risk_perception/spatial_flow/*
+    # topics cannot -- sensor_msgs/Image carries no resolution/origin to
+    # resample from, so a mismatch here silently drops every flow update
+    # (see predictive_risk_costmap_node._flow_cb). Previously 10x10 @
+    # origin (-5,-5), which quietly relied on the resampling path; aligned
+    # to 12x12 @ origin (-6,-6) to match predictive_risk_costmap_node.
+    resolution: 0.10
+    width_m: 12.0
+    height_m: 12.0
+    origin_x: -6.0
+    origin_y: -6.0
+    # Two Behavioral-prior gates: p_movable_min is a cheap class-level
+    # pre-filter (furniture-class tracks skip the deposit loop entirely,
+    # before p_motion is even checked); p_motion_min is the gate
+    # correctness actually depends on -- only things observed actually
+    # moving deposit, so a chair parked in a doorway never brands the
+    # doorway as busy even if p_movable_min alone would have let it
+    # through. 0.5 matches the dynamic/static split object_tracker already
+    # uses (dynamic_half_life_s vs static_half_life_s), so "movable" means
+    # the same thing everywhere.
+    p_movable_min: 0.5
+    p_motion_min: 0.5
+    min_confidence: 0.15
+    learn_rate: 0.20             # per second at p_motion=1; ~5 s of traffic to reach 0.6
+    # Explicit override of the frozen contract below -- normally
+    # learn_rate<=0 alone (as every study run already sets via
+    # spatial_prior_learn_rate:=0.0) is what freezes the node; this forces
+    # the same thing regardless of learn_rate's value. See
+    # spatial_prior_node.is_frozen()/README section 8's "frozen prior"
+    # contract. Default false: the lab/warm-up config keeps learning.
+    frozen: false
+    # 1800 s (30 min) as of 2026-09-13, replacing 300 s.
+    #
+    # READ THIS BEFORE RETUNING: this constant has a much narrower effect
+    # than "how long the prior remembers". decay_factor() returns 1.0
+    # whenever is_frozen() (learn_rate <= 0 or frozen), and _load() applies
+    # NO time-based decay to a reloaded .npz -- it loads the saved arrays
+    # verbatim. So:
+    #   * during a frozen study run (spatial_prior_learn_rate:=0.0, which
+    #     every trial sets): no decay at all, this value is inert;
+    #   * between sessions: no decay, however long the gap;
+    #   * during a WARM-UP run (learning on): this is the only place it
+    #     acts, and it sets how much of the warm-up's own early traffic
+    #     survives to the end of that warm-up.
+    # At 1800 s a ~15 min warm-up retains ~57 % of its first minute's
+    # evidence by the last minute -- a mild recency preference rather than
+    # either "accumulate everything" (7200 s, the node default) or "only
+    # the last few minutes count" (300 s, the previous value here, which
+    # discarded most of a warm-up lap before the lap finished).
+    forget_half_life_s: 1800.0
+    min_deposit_radius_m: 0.25
+    max_deposit_radius_m: 1.00
+    update_rate: 5.0
+    publish_rate: 1.0
+    input_timeout_sec: 1.0
+    # Lab default -- this is the file real (non-sim) sessions accumulate
+    # into; kept unchanged by WP-C. Isaac Sim runs never use this value:
+    # risk_perception/launch/panoptex_sim.launch.py overrides persist_path
+    # to its own spatial_prior_path arg (default
+    # ~/.panoptex/spatial_prior_sim.npz, expanded at launch time) on the
+    # spatial_prior_node instance it spawns, so sim traffic (Carter patrol
+    # warm-up runs, panoptex_nav's learn_lanes:=true bench mode -- see
+    # panoptex_nav/tools/warmup_lanes.sh) can never contaminate the lab
+    # statistic below.
+    persist_path: "~/.panoptex/spatial_prior.npz"
+    load_on_start: true
+    autosave_period_sec: 60.0
+    # Must match predictive_risk_costmap_node's flow_categories -- that
+    # node subscribes to exactly this fixed set of
+    # /risk_perception/spatial_flow/<category> topics at startup. This list
+    # ALSO scopes which categories may deposit at all: a track whose
+    # label_category is not here (furniture, uncertain/door, unknown) is
+    # skipped -- those are static by nature and only ever added noise to
+    # the aggregate S grid.
+    flow_categories: ["person", "robot", "wheeled"]
+    # Merged category-group channels -- see spatial_prior_node's module
+    # docstring "MERGED" topic section. Matches object_tracker_node's
+    # association_groups: a mislabeled Carter (robot <-> wheeled) deposits
+    # into whichever channel matches its label of the moment, so a
+    # consumer that wants "AMR/cart traffic" as one signal reads the
+    # merged /risk_perception/spatial_flow/robot_group and
+    # /risk_perception/spatial_headway/robot_group topics instead of the
+    # two half-populated per-category ones. Deposits themselves stay
+    # per-category; this is a read-time merge only.
+    flow_groups: ["robot,wheeled"]
+    # WP4 -- HEADWAY statistics, one more per-category channel triple
+    # alongside S/F (last_pass_time, headway_mean, headway_count; published
+    # on /risk_perception/spatial_headway/<category>). Learned ONLY while
+    # learn_rate > 0, exactly like S and F, so a study run with the prior
+    # frozen reads the warm-up's headways and never rewrites them.
+    # A "pass" is a track whose id differs from the last one that deposited
+    # at that cell; the sample is the gap since that previous track was
+    # last there. headway_min_s rejects the sub-2 s "gaps" that are really
+    # one physical vehicle whose track id churned mid-crossing (one Carter
+    # carried six ids in one 700 s run -- see object_tracker's
+    # association_key note above), which would otherwise drag every learned
+    # headway toward zero and make the supervisor's blind-crossing rule
+    # think the lane is far busier than it is.
+    headway_min_s: 2.0
+    headway_alpha: 0.2
+    # WP-C -- ACTIVITY, a class-agnostic, run-time "where is traffic right
+    # now" channel (A), published separately from S above. Why a second
+    # channel instead of just reading S with a short forget_half_life_s:
+    # lane_layer, mission_supervisor's static lane band, and the headway
+    # statistic all need S's LIFELONG memory of *where the lanes are* --
+    # forgetting that on a 5-min clock would erase the lane geometry during
+    # any quiet stretch. A instead answers the paper's narrower "latent
+    # risk at busy doorways" question with its own short memory. See
+    # spatial_prior_node.py's module docstring "ACTIVITY (WP-C)" section
+    # for the full design (deposit/decay maths, why it is never frozen,
+    # why it is never persisted).
+    #
+    # Master switch. false = no publisher, no timer, no deposit/decay work
+    # in _update at all -- not "publish zeros".
+    activity_enabled: false
+    activity_half_life_s: 300.0   # 5 min, vs. S's 7200.0 (2 h) above
+    activity_learn_rate: 0.5      # per second at p_motion=1 -- faster than
+                                   # S's learn_rate (0.2) so a few seconds
+                                   # of real traffic is enough to register
+    # Instantaneous-motion floor. Deliberately its OWN parameter, not
+    # p_motion_min above -- this channel ignores p_movable_min AND category
+    # entirely (any confirmed mover deposits, ignoring which label it
+    # carries), but still needs SOME motion evidence; min_confidence above
+    # is reused as-is (same detector-confidence floor every channel here
+    # already applies).
+    activity_pmot_min: 0.5
+    activity_topic: /risk_perception/activity_prior
+    activity_publish_rate: 2.0
+    # "" (default) = no second publisher; activity_topic above is already
+    # a plain nav_msgs/OccupancyGrid and renders with Nav2's ordinary
+    # costmap colour scheme in RViz without one. Set this only to give A
+    # its own distinctly-named layer alongside other OccupancyGrid topics
+    # in the same view.
+    activity_viz_topic: ""
+    # Consumer contract (predictive_risk_costmap_node, NOT implemented by
+    # WP-C -- a follow-up subscribes to activity_topic): compose by MAX
+    # into every stack/planner/collapsed layer, same convention as every
+    # other prior in this codebase, seeding ONLY the lowest SRM level.
+    # Bound: activity_weight <= srm_levels[0] + 0.05 (0.20 + 0.05 = 0.25 at
+    # this file's own srm_levels: [0.2, 0.5, 0.8], set on
+    # predictive_risk_costmap_node above) -- A carries no class/consequence
+    # weighting at all, so it must never be able to outrank a real,
+    # class-priced SRM level on its own. Suggested activity_weight: 0.25.
+
+# WP4 -- the ANALYTIC EXPOSURE MAP: where the sensor suite CAN see, computed
+# from geometry (camera intrinsics + extrinsics, static-map ray casting)
+# rather than from detections. The spatial prior cannot tell "nothing goes
+# here" from "nobody ever looked here"; this grid is the second half of that
+# question, and mission_supervisor's crossing policy gates on it (an
+# approach zone that is not covered gets the blind-crossing rule instead of
+# gap acceptance). See coverage_mask_node.py's module docstring.
+#
+# Geometry MUST match the other grid nodes; panoptex_sim.launch.py's
+# _grid_nodes applies the same `costmap:` override to all four.
+coverage_mask_node:
+  ros__parameters:
+    map_frame: map
+    base_frame: base_footprint
+    resolution: 0.10
+    width_m: 12.0
+    height_m: 12.0
+    origin_x: -6.0
+    origin_y: -6.0
+    coverage_topic: /risk_perception/coverage
+    count_topic: /risk_perception/coverage_count
+    publish_rate: 2.0
+    # (a) overhead camera footprints. Names drive the derived
+    # "<name>_optical_frame" TF and "/<name>/camera_info" topic -- the same
+    # derivations sim_global_cams.launch.py makes from global_cams_sim.yaml's
+    # `cameras:` list, hand-mirrored here (keep them in sync). Override
+    # camera_frames / camera_info_topics only for a non-derived layout; a
+    # list of the same length as camera_names is required if you do.
+    enable_cameras: true
+    camera_names: ["global_cam_mid", "global_cam_entry", "global_cam_exit"]
+    camera_frames: [""]
+    camera_info_topics: [""]
+    # Same 15 m grazing-view guard global_cams_sim.yaml applies to the
+    # projectors (projector_max_range_m): beyond it the ~24 deg overhead
+    # mounts' ground-plane back-projection is worthless, so claiming
+    # coverage there would be claiming to see what we would refuse to
+    # localise. A border ray landing beyond it is dropped, not clamped.
+    max_range_m: 15.0
+    boundary_samples: 16
+    # (b) lidar line of sight against the STATIC map (not a live /scan --
+    # the question is "could the lidar see a mover there", which the
+    # returns-of-the-moment cannot answer). Occupied (>= occupied_min) and
+    # UNKNOWN cells both stop a ray; unknown territory is precisely the part
+    # nobody surveyed.
+    enable_lidar: true
+    map_topic: map
+    lidar_rays: 360
+    lidar_range_m: 12.0
+    occupied_min: 50
+    tf_timeout_sec: 0.1
+    warn_period_s: 30.0
+
+object_tracker:
+  ros__parameters:
+    input_topic: /risk_perception/detections_3d_map
+    output_topic: /risk_perception/world_objects
+    marker_topic: /risk_perception/world_markers
+    map_frame: map
+    gate_distance_m: 0.6
+    # Gate widens by gate_speed_mps * seconds-since-last-update (capped at
+    # gate_max_m), and tracks associate by risk CATEGORY (person/robot/
+    # wheeled/furniture) rather than the exact GroundingDINO phrase. Both
+    # were needed for a moving AMR to keep one track (sim, 2026-09-08: 44
+    # tracks for one Carter before). gate_speed_mps lowered 1.0 -> 0.6 (WP1,
+    # 2026-09-10): paired with the new gate_max_m cap -- the old UNCAPPED
+    # gate is what let a long-coasting track re-associate 10-25 m away
+    # ("speed jump reset" log lines, 2026-09-10 bag finding).
+    gate_speed_mps: 0.6
+    # Hard ceiling on the association gate regardless of how long a track
+    # has gone unobserved (WP1, 2026-09-10) -- also bounds _revive's
+    # graveyard-match gate (_revive calls _gate_for the same way).
+    gate_max_m: 2.5
+    association_key: category
+    # Categories that may associate with each other under association_key:
+    # category even though they aren't equal -- GroundingDINO alternates
+    # "ground mobile robot" (category robot) with "cart"/"forklift"
+    # (category wheeled) on the SAME physical Carter; a bag analysis
+    # (2026-09-09) found 74.6% of world_objects messages carrying >=2 tracks
+    # within 1m of one Carter simultaneously because of exactly this split
+    # (38 distinct ids on one Carter, 326 nearest-id switches). Label
+    # adoption is unaffected (_adopt_label still picks by confidence).
+    association_groups: ["robot,wheeled"]
+    # Duplicate-track merge (same 2026-09-09 finding): every tick, live
+    # confirmed track pairs that are category-compatible (equal, in the
+    # same association_groups entry, or either "unknown"/label-agnostic)
+    # and stay within merge_distance_m / merge_speed_diff_mps of each other
+    # for merge_confirm_ticks consecutive ticks are folded into one -- the
+    # older (smaller id) track survives and the younger is dropped outright
+    # (no graveyard entry). See object_tracker_node._merge_duplicates.
+    merge_enabled: true
+    merge_distance_m: 0.5
+    merge_speed_diff_mps: 0.5
+    merge_confirm_ticks: 3
+    # WP1 -- detections whose bare label is in this list (case-insensitive,
+    # e.g. scan_cluster_detector_node's "lidar_cluster") skip the labeled
+    # association pass above entirely and instead run a second, label-
+    # agnostic pass: nearest existing LIVE track of ANY category, never
+    # adopting a label, never reviving a graveyard track, never changing a
+    # track's category. See object_tracker_node.py's declare_parameter
+    # comment and _associate_agnostic.
+    label_agnostic_labels: ["lidar_cluster"]
+    # WP-B (2026-09-11) category-agnostic, stable association. "legacy" is
+    # the pre-WP-B path above verbatim (hard _same_object_class gate,
+    # Euclidean-distance cost, hits->confirmed, category-gated
+    # graveyard/revive/merge). "agnostic" (default) replaces the labeled
+    # pass' and the lidar pass' cost with Mahalanobis-on-position + size +
+    # a SOFT label penalty (category never hard-gates a candidate, only
+    # costs more -- a mover is a mover), adds score-weighted label voting
+    # instead of latest/most-confident-wins adoption, N-of-M confirmation,
+    # a label-blind graveyard revive, and a looser merge that tolerates one
+    # unconfirmed member. See object_tracker_node.py's declare_parameter
+    # comments (_assoc_cost_agnostic, register_label_vote,
+    # _revive_agnostic, _merge_duplicates_agnostic) for the full detail.
+    association_mode: agnostic
+    # Chi-square gate for a 2-DOF Mahalanobis association test at 99%
+    # confidence (chi2.ppf(0.99, df=2) ~= 9.21) -- the STATISTICAL half of
+    # the agnostic-mode gate; the existing metric cap (gate_distance_m/
+    # gate_speed_mps/gate_max_m via _gate_for) is still required too. WP-B
+    # tuning note: start on unit2_pan_1 against the ~0.3 m lidar/camera
+    # position offset (a persistent, not jitter, source of residual) --
+    # too tight here reproduces the pre-WP1 id-fragmentation failure mode,
+    # too loose lets an unrelated nearby object steal an association.
+    assoc_chi2_gate: 9.21
+    # Per-metre-of-|size_a - size_b| addition to the agnostic-mode
+    # association cost -- nudges Hungarian away from a coincidentally
+    # position-close but differently-sized object even when the label
+    # penalty below doesn't apply (e.g. both "unknown").
+    assoc_size_weight: 2.0
+    # Added to the agnostic-mode association cost when the track's and
+    # detection's categories mismatch, NEITHER is "unknown", and they do
+    # not share an association_groups entry. A SOFT nudge, not a hard
+    # gate: a phrase-churn mismatch still associates if the motion
+    # evidence (Mahalanobis d2) is strong enough -- it just costs more
+    # than a same-category match, so Hungarian still prefers the correct
+    # match when one is available within gate.
+    assoc_label_penalty: 2.0
+    # Track.register_label_vote's decay half-life (seconds): how fast an
+    # old category's accumulated vote weight fades once a track stops
+    # being detected under it, so a genuine relabel (not just a
+    # single-frame GroundingDINO phrase flicker) still wins within a
+    # bounded time instead of the vote getting stuck on stale evidence.
+    label_vote_half_life_s: 30.0
+    # N-of-M confirmation (agnostic mode only): a track confirms once at
+    # least confirm_n of its most recent confirm_m association outcomes
+    # (Track.recent, hit=1/miss=0) were hits -- looser than legacy's
+    # "hits >= min_hits ever", so an intermittently-observed track
+    # (occlusion, camera hand-over) can still confirm without needing
+    # min_hits CONSECUTIVE good ticks, while a track that was briefly
+    # well-observed then went cold doesn't confirm on stale evidence.
+    #
+    # WP-B regression + fix (2026-09-11, "Status 2026-09-11 13:00" in the
+    # plan): the earlier 4/8 tuning note below chased the wrong cause --
+    # `recent` used to accumulate one hit/miss per INCOMING detections
+    # message (3 cameras + 10 Hz lidar share one callback), so a track seen
+    # by only one 0.5 Hz camera collected a miss on nearly every OTHER
+    # source's message too (~5 misses per real hit) and essentially never
+    # held enough hits to confirm -- that's what actually sank carter2 from
+    # 57% (legacy) tracked to 21% (agnostic) on unit2_pan_1, not the
+    # confirm_n/confirm_m ratio itself. Fixed by moving miss-charging out
+    # of _detections_cb into _tick, gated by confirm_miss_grace_s below and
+    # decoupled from message arrival rate entirely (see
+    # object_tracker_node.py's Track.mark_missed docstring). With misses
+    # now meaning "genuinely unseen for a while" instead of "some other
+    # source published", confirm_n/confirm_m no longer need padding against
+    # message-rate noise -- retuned 4/8 -> confirm_n/confirm_m.
+    confirm_n: 3
+    confirm_m: 6
+    # Grace period (s) a track may go unmatched before _tick charges it a
+    # miss at all -- longer than one overhead-camera period (0.5 Hz -> 2 s
+    # worst case) so a single-camera track's normal inter-detection gap
+    # costs zero misses; a genuine gap (occlusion, hand-over) costs at most
+    # one miss per grace interval of continued silence, never per message.
+    # Agnostic mode only.
+    confirm_miss_grace_s: 1.5
+    # Agnostic mode only: an UNCONFIRMED track that ages out still goes to
+    # the graveyard (instead of being dropped outright, legacy's
+    # behaviour) once it has at least this many hits -- real observations
+    # worth reviving later via the label-blind _revive_agnostic, not just
+    # a 1-hit association-noise spawn.
+    graveyard_min_hits: 2
+    # Agnostic mode's duplicate-track merge pair test: two live tracks
+    # merge once their position Mahalanobis distance clears merge_chi2 OR
+    # they are within merge_distance_m (an OR, not legacy's AND-style
+    # distance-and-speed test) for merge_confirm_ticks consecutive ticks,
+    # and at most one of the pair may be unconfirmed (legacy requires
+    # both confirmed). Tuned 4.0 -> 1.0 (WP-B, 2026-09-11, unit2_pan_1
+    # sweep): at 4.0, a barely-observed/wide-covariance track (P not yet
+    # converged, e.g. a sparse "cable" clutter detection) could clear the
+    # Mahalanobis test against an unrelated object almost a metre away
+    # purely because its own uncertainty was still large -- observed live
+    # merging a "cable" track into a "person" track at 0.83 m. 1.0 keeps
+    # the OR's Mahalanobis branch for genuinely tight, converged
+    # duplicates while leaving merge_distance_m (0.5 m) as the practical
+    # bound for everything else.
+    merge_chi2: 1.0
+    # Shift each detection forward by track-velocity x (now - capture stamp)
+    # before the Kalman update; the overhead chain delivers detections 1-2 s
+    # after capture, which otherwise trails a moving AMR by ~its speed x lag.
+    measurement_time_correction: true
+    max_measurement_age_sec: 3.0
+    # Lowered 3 -> 2 (from user-a/sandbox) so a fast mover -- a patrolling
+    # Carter crossing an overhead camera's FOV in a couple of seconds -- can
+    # confirm before it leaves frame; at 3 hits / ~2 Hz effective global-cam
+    # detection it often aged out of the moving cone first. Raise back to 3
+    # if shelf-furniture ghosts start confirming -- check the object_tracker
+    # research CSV (debug_log_dir, log_unconfirmed) for what actually sits
+    # between 2 and 3 hits first. NOTE: in association_mode: agnostic this
+    # is the LEGACY confirmation gate only; confirm_n/confirm_m above are
+    # what actually confirm a track there.
+    min_hits: 2
+    # THE after-fusion filter (from user-a/sandbox). This rejects on the
+    # track's fused, multi-frame, multi-camera confidence, so it
+    # discriminates far better than GDINO's per-frame box_threshold: a real
+    # person is re-detected every cycle and climbs, while a shelf edge that
+    # grounds once at 0.3 decays away before it is ever confirmed. Raised
+    # 0.15 -> 0.30 with the prompt cleanup, then eased 0.30 -> 0.22: the
+    # Carters/forklifts ground at ~0.18-0.19 from the overhead cams
+    # (global_cams_sim.yaml) and never reached 0.30 fused, so they were
+    # dropped as moving obstacles. 0.22 lets a re-detected mover climb past
+    # it while a one-frame 0.18 shelf hit still decays out. Watch the
+    # research CSV; go back toward 0.30 if the racking returns.
+    min_confidence: 0.22
+    # Lowered 0.5 -> 0.05 (WP1, 2026-09-10 "phantom velocity" fix): at 0.5,
+    # steady-state KF velocity sigma from ~0.3 m inter-camera jitter alone
+    # was ~0.9 m/s -- enough to clear the old absolute motion test on a
+    # PARKED object. Motion detection now leans on the displacement-window
+    # test below, not this covariance; see object_tracker_node.py's module
+    # docstring. Alters the lab tracker too, not just sim.
+    process_noise: 0.05
+    default_cov_m2: 0.04
+    # Kalman velocity-variance SEED for a freshly spawned track (WP1,
+    # 2026-09-10 finding): was hardcoded 1.0 (m/s)^2 -- the filter's own
+    # prior, not evidence -- which alone inflated a 6 s predictive rollout's
+    # sigma to ~6 m on a track only a tick old. 0.25 (sigma 0.5 m/s) matches
+    # predictive_risk_costmap_node's own sigma_v_max_mps clamp.
+    velocity_var_init: 0.25
+    update_rate: 10.0
+    marker_lifetime_sec: 0.5
+    # Drop a track this long after its last detection, regardless of how
+    # slowly its confidence is decaying -- makes "how long an unseen object
+    # lingers" a directly stated number rather than an emergent product of
+    # static_half_life_s and min_confidence. Split by mobility (p_movable
+    # > 0.5 selects dynamic): a flat 20s was killing still-confident static
+    # tracks on an ordinary perception gap (occlusion, a missed sam2 frame),
+    # each respawn burning a fresh id. A pruned CONFIRMED track then still
+    # gets graveyard_ttl_sec to be revived (same id) by a same-label
+    # detection within gate_distance_m -- see object_tracker_node._revive.
+    # 20.0 is already well above the 2-3 s overhead-camera hand-over gap a
+    # moving object needs to survive (dynamic_half_life_s below is what
+    # actually needed raising for that) -- kept at 20.0 rather than lowered.
+    max_unseen_sec_dynamic: 20.0
+    max_unseen_sec_static: 300.0
+    graveyard_ttl_sec: 300.0
+    marker_text_height_m: 0.13
+    marker_text_color: [0.05, 0.05, 0.08]
+    marker_show_beliefs: false
+    # Movability is a per-label prior, not a class list -- the tracker maintains
+    # separate p_movable / p_motion beliefs per track and seeds p_movable from
+    # these, keyed by risk_visualization.label_category (LABEL_CATEGORIES),
+    # not the raw label string -- see that file for the full label->category
+    # table (person/robot/wheeled incl. forklift/cart/pallet jack/furniture
+    # incl. chair/table/desk/monitor/door). Anything not in that table (e.g.
+    # "spill") falls to prior_unknown.
+    prior_person:    0.9
+    prior_robot:     0.9
+    prior_wheeled:   0.7
+    prior_furniture: 0.1
+    prior_unknown:   0.3
+    motion_threshold: 3.0
+    # Absolute motion test in addition to the Mahalanobis one: speed >=
+    # motion_speed_mps AND score >= motion_speed_score. A 0.6 m/s AMR seen at
+    # ~1 Hz never reaches score 3.0 (velocity sigma stays 0.5-0.9 m/s). As of
+    # WP1 (2026-09-10) this pair is the LEGACY test -- only used when
+    # motion_require_displacement is false, see below.
+    motion_speed_mps: 0.3
+    motion_speed_score: 0.5
+    # WP1 displacement evidence (2026-09-10 "phantom velocity" fix): whether
+    # a track counts as "moving" is decided by real net displacement over a
+    # measurement window (risk_perception/motion_evidence.py), not the
+    # Kalman filter's own instantaneous velocity, which on a parked object
+    # is mostly inter-camera jitter (~0.3 m ground-plane offset between
+    # overhead cams). See object_tracker_node.py's module docstring and
+    # Track.displacement_evidence/update_beliefs.
+    motion_window_s: 2.0
+    # A genuine displacement has to clear this floor; must exceed the
+    # ~0.3 m inter-camera offset or ordinary hand-over between two cameras
+    # reads as motion on its own. Tuned 0.5 -> 0.3 (WP4, 2026-09-10
+    # follow-up, tools/retrack_bag.py --mode retrack --assert against
+    # unit2_pan_1 AND audit_after with motion_disp_method: half_median):
+    # 0.5 missed 76-97% of carter2's own genuine movement samples even
+    # after the half_median fix -- half_median's median-of-half positions
+    # are far less noisy than the old endpoints statistic, so it needs a
+    # lower floor to catch a real 0.6 m/s mover within ~1 s.
+    motion_min_displacement_m: 0.3
+    # ... OR k_sigma * sqrt(cov_oldest + cov_newest), whichever is larger --
+    # a track fused mostly from noisy global-cam ground-plane projections
+    # needs a bigger displacement to trust than one fused from tight
+    # lidar-cluster returns. Tuned 2.0 -> 1.5 (WP4, same sweep): phantom
+    # rate on unit2_pan_1 crosses the 5% hard cap around k_sigma 1.6-1.7
+    # and keeps climbing as k_sigma drops further (2.4% at 1.5, 5.3% at
+    # 1.0) -- 1.5 is close to the <=2% target with a safety margin, and
+    # reproduces cleanly on audit_after (phantom 0.6%).
+    motion_disp_k_sigma: 1.5
+    # Tuned 3 -> 2 (WP4, same sweep): a genuine 2-sample net displacement
+    # (already past both thresholds above) was being discarded purely for
+    # lacking a 3rd point during the sim Carter's slower, ~1 Hz
+    # camera-only stretches.
+    motion_min_samples: 2
+    # "endpoints"-method-only: net displacement / path length (see
+    # motion_disp_method below) -- a no-op under the default "half_median"
+    # method, which has no path to compute a straightness ratio over.
+    # Kept at the original WP1 value for when motion_disp_method:
+    # endpoints is selected explicitly.
+    motion_straightness_min: 0.6
+    # 2026-09-10 follow-up finding (WP4 retrack sweep on unit2_pan_1): a
+    # track fused from BOTH a 10 Hz lidar-cluster stream and a slower
+    # camera stream has a real, PERSISTENT (not jittery) offset between
+    # the two sources' own position estimates. The original "endpoints"
+    # statistic (newest-vs-oldest displacement, gated by a path-length
+    # straightness ratio) reads that offset as a zigzag -- observed
+    # straightness ~0.1-0.3 for a track moving in a dead straight line at
+    # 0.6 m/s -- and rejected most of a genuine mover's own evidence.
+    # "half_median" (default) instead splits the measurement window in
+    # half BY TIME and compares the coordinate-wise MEDIAN position of
+    # each half: a per-source offset that's roughly constant within each
+    # half cancels out of the median-to-median difference instead of
+    # alternating into inflated path length. See
+    # motion_evidence.displacement_evidence. "endpoints" is kept
+    # selectable as an explicit fallback, not just dead code.
+    motion_disp_method: half_median
+    # How long displacement evidence keeps counting as "moving" after the
+    # track's last actual measurement (a coast: predict()-only ticks with
+    # no update()) -- same purpose as the pre-WP1 confidence half-life
+    # surviving a camera hand-over gap, just for p_motion's own "moving"
+    # decision instead.
+    motion_hold_s: 3.0
+    # true (default): update_beliefs's `moving` decision is displacement
+    # evidence ALONE. false: the legacy Mahalanobis-OR-speed test above,
+    # unchanged -- an explicit fallback switch in case the displacement
+    # test proves too conservative on real (non-sim) hardware.
+    motion_require_displacement: true
+    # Below this p_motion, damp the Kalman velocity STATE itself toward
+    # zero (exp(-dt/motion_vel_damp_tau_s)) so predict() stops walking a
+    # parked track along a jitter velocity during a coast, and CPA/TTC
+    # (which read the Kalman state, not disp_v) don't score a phantom
+    # closing speed. 0 disables damping.
+    motion_vel_damp_below: 0.5
+    motion_vel_damp_tau_s: 0.5
+    # What _publish_objects reports as vx/vy: "displacement" (default) is
+    # the EMA-smoothed displacement-window velocity (what downstream risk
+    # painting should trust); "kf" is the (now velocity-damped) Kalman
+    # state, the pre-WP1 behaviour.
+    velocity_source: displacement
+    p_motion_decay:   3.0
+    movable_gain:     0.5
+    movable_decay:    0.01
+    motion_log_path: ""
+    # semantic decay: things that move are forgotten fast. dynamic_half_life_s
+    # raised from 2.0 (lab+sim default, User B's decision 2026-09-08): a
+    # patrolling mover's overhead-camera hand-over/occlusion gap is 2-3 s,
+    # and at 2.0 s that decayed confidence to 0.5**(2.5/2.0)=0.42 over such a
+    # gap -- close enough to min_confidence to prune and re-spawn a mover
+    # mid-gap (carter1 tracked only ~60% of the time, 2026-09-08 panoptex_nav
+    # sim runs). At 4.0 s the same gap only reaches 0.5**(2.5/4.0)=0.65.
+    # Raised again 4.0 -> 6.0 from user-a/sandbox: confidence decays on EVERY
+    # _tick() (10 Hz) whether or not a fresh detection arrived, and the 4
+    # GDINO/SAM2 chains sharing one GPU + inference_stride + a ~12-13 FPS
+    # Isaac render deliver per-camera detections far more sparsely and
+    # irregularly than 10 Hz, so a track climbed on each (infrequent) hit and
+    # visibly decayed in between -- a sawtooth in confidence, hence in
+    # consequence (= base_risk * confidence) and in the painted cost, read as
+    # "flickering" (2026-09-11 research CSV). 6.0 s smooths that without
+    # changing eviction timing (max_unseen_sec_dynamic, unrelated, still
+    # 20 s). See object_tracker_node.py's declare_parameter comment and
+    # test/test_object_tracker_motion.py.
+    dynamic_half_life_s: 6.0
+    static_half_life_s: 120.0
+    # Relation prior (proposed) -- see Track.update_relation. relation_rise:
+    # fraction of the gap to relconf closed per tick on a hit (never a hard
+    # snap). relation_decay: exponential fade rate per second with no hit.
+    # Starting points, not tuned -- validate with
+    # tools/scenario_publisher.py --rel-pulse before trusting on real data.
+    relation_rise: 0.6
+    relation_decay: 1.0
+    # Speed plausibility (2026-09-10 finding): a label-agnostic
+    # lidar_cluster track that re-associates with the wrong shelf edge
+    # between scans (static_margin_m alone let this through -- see
+    # scan_cluster_detector below) reads as several m/s to the Kalman
+    # filter, nothing physical here moves that fast. Above cap: clamp
+    # velocity to the cap, direction kept. Above jump_reset_factor x cap:
+    # treat as an association jump instead -- velocity and p_motion reset
+    # to 0 (see object_tracker_node.py's Track.enforce_speed_cap). Categories
+    # not listed here (furniture) fall to max_speed_default_mps.
+    max_speed_person_mps: 2.0
+    max_speed_robot_mps: 1.5
+    max_speed_wheeled_mps: 2.0
+    max_speed_unknown_mps: 1.2
+    max_speed_default_mps: 2.5
+    jump_reset_factor: 2.0
+    # WP1 "motion overrides class" (2026-09-10 follow-up, unit2_pan_2
+    # finding): 5/7 carter2 contacts on that confirmation run had the
+    # Carter correctly tracked as MOVING (pmot 1.0, v~0.5 m/s, real
+    # displacement) but under a furniture label ("table"/"chair",
+    # GroundingDINO phrase noise) -- furniture is excluded from the risk
+    # stack (stack_categories), the speed governor (_ACTIONABLE_CATEGORIES)
+    # and mission_supervisor's corridor-yield users (CORRIDOR_CATEGORIES),
+    # so no comet, no yield, contact. See object_tracker_node.py's module
+    # docstring and Track.update_promotion/published_label -- this changes
+    # only the PUBLISHED label (a "table" detection still associates with
+    # the promoted track exactly as before; self.label/category never
+    # change).
+    mover_promote_enabled: true
+    # p_motion floor the promotion streak timer requires CONTINUOUSLY --
+    # higher than update_beliefs's own moving-decision floor so a
+    # promotion means "clearly and persistently moving," not "flickered
+    # across 0.5 once."
+    mover_promote_pmot_min: 0.8
+    mover_promote_min_s: 1.0
+    # Same displacement-evidence diagnostic update_beliefs already
+    # computes (net_disp_m / class_id's |disp=..) -- re-checked here as an
+    # independent floor so motion_require_displacement: false (the legacy
+    # Mahalanobis-only test) still needs real measured displacement before
+    # promoting, not just a velocity score.
+    mover_promote_min_disp_m: 0.5
+    mover_promote_min_hits: 5
+    # Sticky demotion window: a promoted track reverts only after this many
+    # seconds with no tick at p_motion >= 0.5 -- long enough a real
+    # mislabelled Carter parking mid-crossing doesn't instantly drop back
+    # out of the risk stack/governor/corridor-yield (the exact failure
+    # this feature exists to prevent), short enough a one-off false
+    # promotion doesn't stay promoted for the rest of the run.
+    mover_demote_s: 60.0
+    # risk_visualization.py's LABEL_CATEGORIES maps this to "wheeled" and
+    # CLASS_BASE_RISK to 0.65 (cart's value) -- every category-gated
+    # consumer (stack categories, governor, corridor users, extent floors:
+    # wheeled 0.45) then treats a promoted track as an actionable mover
+    # with no changes of its own.
+    mover_promote_label: "moving object"
+
+# WP1 -- lidar dynamic-cluster detector. Static-map subtraction + range-
+# adaptive Euclidean clustering over /scan, publishing straight onto the
+# SAME shared /risk_perception/detections_3d_map topic the two camera
+# chains use (class_id "lidar_cluster"), so object_tracker's label-agnostic
+# pass (label_agnostic_labels above) fuses lidar-tracked position into
+# whatever track a camera already has, or spawns a fresh "unknown" track if
+# nothing else has seen the object yet. See scan_cluster_detector_node.py
+# and scan_clustering.py's module docstrings for the full pipeline.
+scan_cluster_detector:
+  ros__parameters:
+    scan_topic: /scan
+    map_topic: /map
+    detections_topic: /risk_perception/detections_3d_map
+    map_frame: map
+    base_frame: base_footprint
+    max_range_m: 12.0
+    # Drop a beam return within this many metres of an occupied map cell,
+    # or landing on unknown territory (see scan_clustering.subtract_static).
+    # Raised from 0.15 (2026-09-10 finding, see object_tracker's
+    # jump_reset_factor comment above): AMCL error + map-quantisation
+    # rounding let real shelf edges survive inside 0.15 m of their own
+    # occupied cell, sprouting a lidar_cluster there that then jumps
+    # between shelf segments scan to scan. 0.35 m clears both AMCL's
+    # typical error band and a full map cell's worth of quantisation.
+    static_margin_m: 0.35
+    # Cluster centroids within this radius of the robot's own map-frame
+    # pose (TF map -> base_frame) are the lidar's return off the robot's
+    # own mount/body, not a real external object.
+    self_radius_m: 0.25
+    # Range-adaptive gap: gap_base_m + gap_per_m * r. A beam gap that would
+    # be tight up close is loose far away (fixed angular resolution spans a
+    # wider arc length at range).
+    cluster_gap_m: 0.25
+    cluster_gap_per_m: 0.02
+    min_points: 3
+    max_extent_m: 1.5
+    # Near-face centroid correction (lidar-fusion probe, 2026-09-09): a beam
+    # only returns off the side of an object facing the lidar, so the raw
+    # mean-of-points centroid sits biased toward the sensor -- push it
+    # outward along the sensor->centroid bearing by
+    # min(centroid_push_factor * max(extent_x, extent_y), centroid_push_max_m).
+    # 0 disables (either param). See scan_clustering.push_centroid_from_sensor.
+    centroid_push_factor: 0.5
+    centroid_push_max_m: 0.30
+    detection_score: 0.5
+    # Deliberately smaller than global_cam_projector's base_cov_m2 (0.10)
+    # and object_tracker's default_cov_m2 fallback (0.04) -- a centimetre-
+    # range lidar return is more precise than either camera path, and a
+    # smaller covariance wins the tracker's Kalman fusion (see
+    # object_tracker_node.py's module docstring). Raised from 0.02
+    # (2026-09-10 finding): 0.02 was small enough that even a jumpy,
+    # low-confidence shelf-edge cluster could outweigh a well-tracked
+    # camera detection in the fusion; 0.05 keeps lidar clusters winning
+    # over both camera paths (still well under 0.10/0.04) with more
+    # headroom so they can't outweigh a camera track outright.
+    cov_base_m2: 0.05
+    cov_per_m: 0.002
+    stride: 1
+    tf_timeout_sec: 0.1
+    publish_markers: false
+    # Cross-scan persistence (2026-09-10 finding) -- a cluster is only
+    # published once it has matched a cluster in each of the last
+    # min_consecutive_scans scans within persist_match_m of its previous
+    # match. See scan_clustering.ClusterPersistence's docstring.
+    min_consecutive_scans: 3
+    persist_match_m: 0.3
+
+# Live evaluation collector -- the real-time counterpart to tools/evaluate_run.py.
+# Driven by tools/run_trials.py over the /evaluation/trial_control ->
+# /evaluation/trial_result String pair; at trial end it calls the same tested
+# batch functions in evaluation_metrics.py that the bag-replay path uses.
+# Launched by evaluation_reference.launch.py ALONGSIDE the fixed reference
+# costmap -- risk_topic samples that node's /risk_costmap_reference grid, never
+# whichever costmap actually drove Nav2 that run, so every ablation is scored on
+# one common yardstick (see that launch file's and evaluate_run.py's docstrings).
+evaluation_node:
+  ros__parameters:
+    # NOTE: the param is risk_topic, not risk_costmap_topic -- the module
+    # docstring's name is stale, evaluation_node.py declares this one.
+    risk_topic: /risk_costmap_reference
+    world_objects_topic: /risk_perception/world_objects
+    detections_topic: /risk_perception/detections_2d
+    # The global plan Nav2 publishes; evaluation_node counts replans off its
+    # header stamps -- see panoptex_sim.launch.py's `navigation` note.
+    replan_topic: /plan
+    map_frame: map
+    base_frame: base_footprint
+    sample_rate_hz: 10.0
+    # Keep == predictive_risk_costmap_node's pred_dt so realtime_factor scores
+    # the reference costmap against the rate it was actually configured for.
+    configured_period_s: 0.2
+    engagement_threshold_m: 2.0
+    stop_speed_mps: 0.05
+
+# -- Global (overhead) camera chain -----------------------------------------
+# gdino_detector and sam2_segmenter above are the ROBOT camera instances;
+# the global cam launches a SECOND instance of each (see
+# global_cam.launch.py) with its topics remapped to the *_global names
+# below via that launch file's `remappings=`, not separate param blocks --
+# the node code's output topics are not parameterized (see
+# gdino_detector_node.py), only image_topic is.
+
+global_cam_bridge:
+  ros__parameters:
+    bind_address: 0.0.0.0
+    port: 5000          # must match stream_sender_tcp.py --port on the Pi
+    publish_rate_hz: 15.0
+    publish_raw: true
+    timestamp_offset_sec: 0.0
+    max_frame_bytes: 8388608   # 8 MiB
+    status_period_sec: 5.0
+    stale_warn_sec: 2.0
+
+global_cam_calibrator:
+  ros__parameters:
+    floor_tags_yaml: ""   # set via launch arg -> config/floor_tags.yaml
+    detections_topic: /global_cam/apriltag/detections
+    camera_info_topic: /global_cam/camera_info
+    map_frame: map
+    min_tags: 2
+    max_reprojection_error_px: 5.0
+    # Frozen extrinsic. The camera is bolted down, so its pose in `map` is a
+    # constant; caching it means the overhead chain can come up with the floor
+    # tags lifted and apriltag_node not running (enable_apriltag:=false), which
+    # also gives the GPU models back the CPU they were competing for.
+    # extrinsic_yaml is set via launch arg (ROS yaml cannot expand ~), same as
+    # floor_tags_yaml. Only solves at or under max_reprojection_error_px are
+    # written; use_saved_extrinsic seeds startup and a live solve overrides it.
+    extrinsic_yaml: ""
+    save_extrinsic: true
+    save_every_n_solves: 30
+    use_saved_extrinsic: false
+
+global_cam_projector:
+  ros__parameters:
+    camera_info_topic: /global_cam/camera_info
+    detections_topic: /global_cam/detections_2d
+    mask_topic: /global_cam/instance_mask
+    output_topic: /risk_perception/detections_3d_map
+    marker_topic: /global_cam/map_markers
+    # Raised from 1.0s so the raw markers (debug-only display, off by default
+    # -- see rviz/panoptex.rviz) bridge a slower detection cycle without
+    # blinking; the fused overlay this display sits behind publishes on a
+    # timer and does not have this problem.
+    marker_lifetime_sec: 3.0
+    map_frame: map
+    sync_tolerance_sec: 0.2
+    cache_size: 60
+    transform_timeout_sec: 0.25
+    base_cov_m2: 0.10
+    cov_reference_range_m: 3.0
+    max_cov_m2: 4.0
+    bottom_band_px: 3
+    default_footprint_m: 0.30
+    # Near-edge correction (lab+sim default, User B's decision 2026-09): the
+    # mask's bottom-band pixel is the object's floor-contact point NEAREST
+    # the overhead camera, not its centre -- pushed further along the
+    # camera->point horizontal ray by half the object's typical extent,
+    # keyed off risk_visualization.label_category(). Applied BEFORE the
+    # self-exclusion test below (global_cam_projector_node._mask_cb), so the
+    # X3's own detections land closer to its true (tag-0/TF) centre and are
+    # excluded more reliably. 0.20 m person (half a stance width), 0.35 m
+    # robot/wheeled (half a Carter-class AMR's ~0.7 m footprint), 0.0 m
+    # other/furniture/unknown (bottom-band pixel already close to a
+    # table/chair leg; no reliable extent to assume for an unknown label).
+    # See global_cam_projector_node.apply_extent_offset() and
+    # test/test_projector_extent.py.
+    extent_offset_person_m: 0.20
+    extent_offset_robot_m: 0.35
+    extent_offset_wheeled_m: 0.35
+    extent_offset_other_m: 0.0
+    # Grazing-view guard (sim overhead mounts, ~24 deg below horizontal): 0.0
+    # = off (default here; the real lab camera's geometry doesn't need it).
+    # sim_global_cams.launch.py overrides this from global_cams_sim.yaml's
+    # optional projector_max_range_m key.
+    max_range_m: 0.0
+    # Self-exclusion: drop detections near the robot's own position so the
+    # overhead cam never paints risk around the robot itself. Tag-0 pose
+    # preferred, TF map->base_footprint fallback; no pose (bench mode) ->
+    # gate is inert. Any label inside the tight radius is dropped (a
+    # mislabeled robot is still the robot); robot-vocabulary labels get the
+    # looser radius to absorb ground-projection smear.
+    robot_pose_topic: /global_cam/robot_pose
+    self_exclusion_enabled: true
+    self_exclusion_radius_m: 0.40
+    self_exclusion_robot_radius_m: 0.80
+    self_pose_max_age_sec: 1.5
+    robot_base_frame: base_footprint
+    marker_sphere_scale_m: 0.15
+    marker_text_height_m: 0.11
+    marker_text_color: [0.05, 0.05, 0.08]
+    marker_show_coords: false
+    # Relation prior (geometric) -- kept identical to rgbd_projector's block
+    # above so both camera chains produce comparable relconf values.
+    relation_containment_threshold: 0.6
+    relation_dilate_px: 5
+    relation_max_distance_m: 2.5
+
+global_cam_localizer:
+  ros__parameters:
+    floor_tags_yaml: ""   # set via launch arg -> config/floor_tags.yaml
+    detections_topic: /global_cam/apriltag/detections
+    camera_info_topic: /global_cam/camera_info
+    output_topic: /global_cam/robot_pose
+    map_frame: map
+    base_frame: base_footprint
+    base_cov_m2: 0.02
+    base_cov_yaw_rad2: 0.05
+    transform_timeout_sec: 0.25

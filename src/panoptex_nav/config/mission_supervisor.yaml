@@ -1,0 +1,344 @@
+# Defaults for panoptex_nav/mission_supervisor.py -- see that module's
+# docstring for the state machine and corridor.py's for the geometry these
+# thresholds parameterise. The corridor block below is kept in sync with
+# corridor.CORRIDOR_DEFAULTS, which is the single source of truth the node
+# declares its parameters from; this file exists so a launch can override
+# them in one place and so every number has its rationale written down next
+# to it.
+#
+# NOTE: waypoints_file has no useful default (it is an absolute path to a
+# yahboomcar_nav-format waypoint yaml) and is expected to come from the
+# launch file. yield_enabled is the A/B switch: false = the baseline arm
+# (a plain waypoint executor), true = the Panoptex arm.
+mission_supervisor:
+  ros__parameters:
+    # ------------------------------------------------------- mission
+    waypoints_file: ""          # absolute path; set by the launch file
+    loop: true
+    laps: 0                     # 0 = unlimited while loop:=true
+    start_index: 0
+    frame_id: "map"
+    start_delay_sec: 0.0
+    server_timeout_sec: 60.0
+    waypoint_pause_sec: 0.2
+    yield_enabled: false
+    state_topic: "/mission/state"
+
+    # ------------------------------------------------------- plumbing
+    world_objects_topic: "/risk_perception/world_objects"
+    plan_topic: "plan"          # relative: nav2's global plan
+    map_topic: "map"            # relative, transient-local
+    # The MERGED group channel (S = max over robot + wheeled, F from the
+    # winning member), not the bare `robot` one. The sim's Carters are
+    # learned as `wheeled` -- GroundingDINO calls them "cart"/"forklift" as
+    # often as "mobile robot" -- so `/spatial_flow/robot` is empty and every
+    # corridor heading silently fell back to raw velocity. One array serves
+    # every corridor user whatever its own category: a lane is a lane
+    # whichever label the detector put on the thing driving down it.
+    flow_topic: "/risk_perception/spatial_flow/robot_group"
+    flow_enabled: true
+    # Static lane keep-out built from the learned Spatial-Prior occupancy.
+    # Live corridors only exist while a user is being tracked; the second
+    # AMR lane of the aisle looked "free" whenever its Carter was elsewhere,
+    # and refuges landed in it (avoid_panoptex_1: (1.73,-4.22), (1.23,-3.22),
+    # (2.03,-3.07), (2.53,-3.07), then six recomputes). RELIABLE +
+    # TRANSIENT_LOCAL, map frame, whole-map extent.
+    lane_band_enabled: true
+    lane_band_topic: "/risk_perception/spatial_prior"
+    # ------------------------------------------ crossing policy (WP4)
+    # The analytic exposure map (risk_perception/coverage_mask_node) and the
+    # learned headway statistic (spatial_prior_node's WP4 channels). Both
+    # are OPTIONAL: with neither topic present, or with
+    # crossing_policy_enabled:=false, the crossing decision is exactly the
+    # pre-WP4 gap acceptance. Turning this off is the way to reproduce the
+    # avoid_panoptex_1-4 behaviour without reverting code.
+    crossing_policy_enabled: true
+    coverage_topic: "/risk_perception/coverage"
+    # 32FC3 (headway_mean, headway_count, last_pass_time) on the SAME
+    # geometry as flow_topic -- flow_resolution/flow_origin_* describe both.
+    # And the same merged GROUP as flow_topic, necessarily: lane_speed()
+    # sizes the approach zone from the flow sample while blind_crossing_ok()
+    # times it from the headway sample at the same cell, so two different
+    # populations would mean a zone measured against one traffic pattern and
+    # waited out against another.
+    headway_topic: "/risk_perception/spatial_headway/robot_group"
+    map_frame: "map"
+    base_frame: "base_footprint"
+    tf_timeout_sec: 0.1
+    publish_rate_hz: 5.0
+    # OccupancyGrid value at or below which a cell counts as free floor for
+    # the refuge search. UNKNOWN (-1) is never free.
+    map_free_max: 25
+    # The Spatial-Flow image carries no resolution/origin of its own, so the
+    # geometry has to be declared. Defaults = the sim's whole-map extent from
+    # risk_perception/config/global_cams_sim.yaml's `costmap:` block
+    # (0.10 m cells, origin -10.4 / -12.3); rows/cols come from the image.
+    flow_resolution: 0.10
+    flow_origin_x: -10.4
+    flow_origin_y: -12.3
+
+    # -------------------------------------- track -> corridor-user gating
+    # Tracks this close to the robot ARE the robot: the overhead cameras see
+    # the X3 as just another "mobile robot" and the tracker has no notion of
+    # self.
+    self_exclusion_radius_m: 0.7
+    # Only convincingly-moving tracks own a lane. People are excluded on
+    # purpose (they turn on the spot, so a 10 s swept rectangle is fiction)
+    # -- they are risk_speed_governor's distance-only branch.
+    pmot_min: 0.5
+    min_user_speed_mps: 0.2
+    # WP-A, 2026-09-11: any category except person (NON_CORRIDOR_CATEGORIES
+    # in corridor.py) may own a corridor once it clears pmot_min/
+    # min_user_speed_mps above -- a mover is a mover, not just whichever
+    # ones the RAW label happened to be "robot"/"wheeled" (a tracker-
+    # promoted "table" already gets this via category relabelling; a
+    # genuinely moving piece of furniture the promotion logic hasn't
+    # caught yet should too). category is then only a tie-breaker, in
+    # crossing_choice(), between two otherwise-equal crossings. 1.0/0.0,
+    # not true/false -- every CORRIDOR_DEFAULTS entry is declared as a
+    # float (see corridor.py's own CORRIDOR_DEFAULTS comment); a bool
+    # literal here would mismatch the DOUBLE type declare_parameter infers
+    # from that Python float default and fail at node startup. 0.0 restores
+    # the pre-2026-09-11 behaviour: only CORRIDOR_CATEGORIES ("robot",
+    # "wheeled") may own a corridor at all.
+    corridor_users_any_mover: 1.0
+
+    # ------------------------------------------------- corridor shape
+    # Lane = |v| * t_corridor_sec ahead of the user, back_margin_m behind it,
+    # corridor_half_width_m either side. 10 s is the horizon over which a
+    # constant-velocity extrapolation of a warehouse AMR is still worth
+    # anything; 0.65 m half width is a Carter's body plus a hand's breadth.
+    t_corridor_sec: 10.0
+    back_margin_m: 1.0
+    corridor_half_width_m: 0.55   # 0.25 Carter + 0.15 X3 + 0.15 margin (0.65 put the west-strip leg permanently inside lane 1's corridor, 2026-09-09)
+    # CONTAINMENT width -- "am I in the way?" -- used for the refuge
+    # trigger, the lane-band dilation, the hold/refuge-point re-check and
+    # the refuge line-clearance preference. NOT used for gap acceptance
+    # (t_clear / plan entry), which stays on corridor_half_width_m because a
+    # crossing is transient and t_margin_sec already absorbs the error.
+    # 0.55 + 0.35 m: the tracker's Carter position was 0.1-0.4 m off ground
+    # truth in avoid_panoptex_2, so a robot the nominal corridor called
+    # "outside" at lateral 0.65 m was really 0.15 m from being hit.
+    danger_half_width_m: 0.90
+
+    # ------------------------------------------------- flow snapping
+    # Snap the lane heading onto the learned Spatial-Flow heading when that
+    # cell has evidence (s > flow_min_conf) and broadly agrees with the
+    # observed velocity (< flow_snap_deg). Disagreement means the agent is
+    # genuinely leaving the learned lane -- do NOT snap it back.
+    flow_min_conf: 0.3
+    flow_snap_deg: 30.0
+
+    # ------------------------------------------------- gap acceptance
+    # t_clear = (d_entry + 2*half_width + clear_margin_m) / v_cross_mps;
+    # hold iff 0 < tta < t_clear + t_margin_sec. v_cross is deliberately
+    # pessimistic (nav2 decelerates into and accelerates out of a crossing),
+    # because this number has to be a LOWER bound on our own speed.
+    clear_margin_m: 0.3
+    v_cross_mps: 0.20
+    t_margin_sec: 2.0
+    # Stand-off: wait this far back along the plan from the lane entry.
+    hold_back_m: 0.7
+
+    # -------------------------------------------------------- refuge
+    # Robot already inside a lane whose user arrives within t_yield_sec:
+    # step aside to the nearest free cell outside every corridor, within
+    # refuge_radius_m and at least refuge_clearance_m from anything occupied
+    # or unmapped (0.45 m ~ the X3's half-diagonal plus a margin).
+    t_yield_sec: 8.0
+    # 2.5, not 1.5: with the lane band excluded, the nearest legal refuge
+    # from the middle of the aisle is the east column (x > 2.8) or the west
+    # strip (x < 0.7), ~2 m out. A 1.5 m disc simply could not reach them.
+    refuge_radius_m: 2.5
+    refuge_clearance_m: 0.45
+    # Widened to ONCE when the 2.5 m disc has nothing legal in it, before
+    # falling back to holding in place. Needed since refuge_lane_clearance_m
+    # became a hard filter: in the sim aisle the wall at x ~ 0.3 leaves
+    # nothing at all west of carter1's line, so the whole 2.5 m disc can
+    # come up empty where it used to answer with a cell on the line.
+    refuge_radius_max_m: 4.0
+    # NEVER CROSS A LANE TO REACH A REFUGE (mppi_panoptex_4, 2026-09-09).
+    # A candidate on the far side of a lane line from the robot is rejected
+    # outright unless that lane's user is further away, in time, than the
+    # crossing itself takes plus this margin:
+    #   crossing_time = (|robot offset| + |candidate offset|
+    #                    + 2*danger_half_width_m) / v_cross_mps
+    # The run stepped aside from (0.82, 0.57) to (2.73, 1.93) -- across
+    # carter1's lane, 1.9 m of danger band, >= 7 s at 0.20 m/s -- with the
+    # Carter 6.5 s out, and was met head-on in the middle of it. When
+    # nothing passes this test the answer is the wall hug below, not a
+    # crossing.
+    refuge_cross_margin_s: 2.0
+
+    # ------------------------------------------- observed-lane memory
+    # mppi_panoptex_2 (2026-09-09): 7 contact episodes, carter1 correctly
+    # tracked and correctly yielded to every time, and 10 of the run's 25
+    # refuge targets still landed within 0.6 m of its permanent centre line
+    # (one of them 0.01 m). A corridor is an INSTANTANEOUS window -- 1 m
+    # behind the track, speed*t_corridor (~6 m) ahead of it -- so a cell on
+    # the line but outside the window passed every test, and then the window
+    # swung back over it: 9 "recomputing" cycles in one episode, each one
+    # cancelling the refuge goal (status 6). The learned lane band did not
+    # catch them either (the prior read 2-15 there against a threshold of
+    # 5). So the session remembers the LINE each user has been observed
+    # driving, and refuges keep clear of it whether or not anyone is on it
+    # right now. See corridor.py's "LANE-LINE MEMORY" section.
+    #
+    # How long a lane survives with nothing driving down it. ~ a whole study
+    # run: a patrol lane is still a lane while its AMR is at the far end.
+    lane_memory_s: 600.0
+    # Two observed segments are the same lane when their UNDIRECTED headings
+    # agree within this angle (a patrol drives both ways) and the newer lies
+    # within lane_merge_dist_m of the older one's line. This is what turns
+    # six track ids' worth of fragments into one line at x = 1.27.
+    # 25 deg / 1.0 m, and the lateral test is taken at the new segment's
+    # MIDPOINT rather than at both its endpoints (mppi_panoptex_3,
+    # 2026-09-09: the memory fragmented into 32 lanes over two Carter patrol
+    # lines, each fragment demanding refuge_lane_clearance_m of its own,
+    # which emptied the 2.5 m refuge disc and pushed every refuge out to the
+    # 4.0 m stage while a Carter closed). A 2-4 m piece of a jittering track
+    # tilts about its centre, swinging an endpoint half a metre while its
+    # midpoint barely moves.
+    lane_merge_angle_deg: 25.0
+    lane_merge_dist_m: 1.0
+    # ...and the one thing the old test was too PERMISSIVE about: along-line
+    # separation was ignored entirely, so two collinear stretches at opposite
+    # ends of the hall merged into one lane whose line covered floor nothing
+    # had driven on. Overlapping stretches score 0.
+    lane_merge_gap_m: 3.0
+    # Clearance is measured against each segment EXTENDED by this much past
+    # both observed ends: carter1 patrols y = -4 to y = 7 and the cameras
+    # watch rather less of that.
+    lane_extension_m: 2.0
+    # HARD minimum distance from every remembered lane line for a refuge, a
+    # hold-in-place and the waypoint gate. Unlike the lane band this has no
+    # least-bad fallback -- when it empties the search disc the answer is to
+    # widen once (refuge_radius_max_m), then hug the wall on our own side,
+    # never to take a cell on the line and never to cross one.
+    #
+    # DERIVED, not fixed (mppi_panoptex_4, 2026-09-09):
+    #   max(refuge_lane_clearance_min_m,
+    #       refuge_user_half_width_m + refuge_robot_radius_m
+    #       + refuge_lane_margin_m)  =  max(0.60, 0.30 + 0.15 + 0.30) = 0.75
+    # It was a flat 1.0 m (danger_half_width_m + 0.1), and that is what put
+    # the robot across the lane: the aisle west of carter1's line x = 1.27
+    # is 0.97 m wide (a shelf at x ~ 0.30), so NO cell on the robot's own
+    # side could ever clear 1.0 m and the only "legal" refuge was on the far
+    # side. A clearance floor has to be what the geometry needs -- the
+    # widest user's half width, our own radius, and air between the two --
+    # not a number that makes the reachable refuge illegal.
+    #
+    # refuge_lane_clearance_m is the explicit OVERRIDE: > 0 is used exactly
+    # as given, 0.0 (shipped) means derive.
+    refuge_lane_clearance_m: 0.0
+    refuge_user_half_width_m: 0.30    # a Carter's half width
+    refuge_robot_radius_m: 0.15       # the X3's nav2 robot_radius
+    refuge_lane_margin_m: 0.30        # air between the two bodies
+    refuge_lane_clearance_min_m: 0.60
+    # EVIDENCE FLOOR for that filter: a lane keeps refuges out only once it
+    # has been observed over at least lane_min_length_m from at least
+    # lane_min_points sightings. A stub from a track rounding a corner, or a
+    # 1 s glimpse of something crossing the hall, is not a lane. Short lanes
+    # are still remembered and still grow -- they simply do not vote, and
+    # /mission/state reports both counts (`lanes` and `lanes_effective`).
+    lane_min_length_m: 1.5
+    lane_min_points: 5.0
+    # Hard cap on the memory. A warehouse hall has a handful of lanes; the
+    # old cap of 32 was never a lane count, it was track churn. Shortest and
+    # oldest are dropped first.
+    lane_max: 8.0
+
+    # -------------------------------------------- refuge hysteresis
+    # A COMMITTED refuge is worth something: a corridor window sliding over
+    # it is not a reason to cancel the goal. Recompute only for a user whose
+    # closest approach to the committed point is inside
+    # refuge_recompute_tta_s (or when the point's lane-line clearance has
+    # dropped 0.2 m below refuge_lane_clearance_m), and never more often
+    # than refuge_recompute_min_s.
+    refuge_recompute_tta_s: 6.0
+    refuge_recompute_min_s: 2.0
+    # Spatial-prior value at or above which a cell counts as somebody's
+    # lane, before dilation by corridor_half_width_m. Low on purpose: the
+    # prior is an EMA that only saturates on repeated traversals, and one
+    # pass is already evidence.
+    lane_band_min_value: 5.0
+
+    # ------------------------------ coverage + headway crossing (WP4)
+    # Mirrors corridor.CORRIDOR_DEFAULTS; see corridor.py's "CROSSING A
+    # LANE YOU CANNOT SEE" section for the decision order. In short: size
+    # the approach zone (v_lane * (t_clear + t_margin) upstream of the
+    # crossing, danger_half_width_m either side), ask the exposure map how
+    # much of it we can actually see, and only fall back to the learned
+    # traffic statistic where we cannot. The policy can only ADD holds --
+    # whenever plain gap acceptance says hold, the answer is hold.
+    #
+    # Fraction of the zone that must be covered before the timing test is
+    # trusted. Not 1.0: a shelf routinely clips the far corner of a zone,
+    # and demanding a perfect view would put every crossing on the blind
+    # branch (which is slower, not safer).
+    coverage_min: 0.8
+    # /risk_perception/coverage is 0 or 100 (any-sensor OR); 50 is the
+    # midpoint, so anything between is a resampling artefact.
+    coverage_cell_min: 50.0
+    # Zone length comes from the learned flow speed |F| at the crossing
+    # cell, clamped here, and floored again by the tracked user's own speed
+    # (see corridor.lane_speed): an unlearned or bidirectionally-cancelled
+    # cell reads near zero, which would collapse the zone and declare every
+    # crossing safe.
+    v_lane_min_mps: 0.4
+    v_lane_max_mps: 1.0
+    # Headway samples needed before the learned mean gap is trusted, and
+    # how many mean gaps must have elapsed since the last observed pass.
+    headway_min_count: 3.0
+    headway_factor: 1.0
+    # With no trustworthy headway (a cold prior, or a lane nothing has been
+    # seen using) there is no statistic to wait for: wait this long, then
+    # cross. Bounded on purpose -- a robot waiting forever for evidence
+    # that will never arrive is its own failure mode, and MPPI + the
+    # collision monitor are still underneath.
+    blind_wait_max_s: 15.0
+    # A corridor user's centre within this of the crossing point counts as
+    # a pass of it. Also the quantisation of the per-crossing memory, so
+    # two crossings the robot could confuse share one entry.
+    pass_radius_m: 0.5
+
+    # -------------------------------------------- release / hysteresis
+    # Release once the yielded-for point is half_width + release_margin_m
+    # behind the user (its body has fully cleared), or its track has been
+    # gone for lost_timeout_sec. confirm_ticks consecutive agreeing
+    # evaluations are needed before yielding at all (0.6 s at 5 Hz), and no
+    # release may happen within min_hold_sec of committing -- together these
+    # are what stop a flickering track producing a stop-go-stop stutter.
+    release_margin_m: 0.3
+    lost_timeout_sec: 3.0
+    confirm_ticks: 3
+    min_hold_sec: 1.0
+    # A release caused by the track being LOST (rather than seen to pass) is
+    # weak evidence -- one Carter carried six ids in one run -- so a new
+    # yield is confirmed in a single tick for this long afterwards.
+    post_loss_cooldown_sec: 2.0
+    # If the computed hold point is already this close, just stop.
+    hold_cancel_radius_m: 0.3
+
+    # ------------------------------------------------ goal sequencing
+    # CANCEL THEN SEND. nav2's SimpleActionServer runs one goal at a time and
+    # can take a freshly accepted goal down together with the one it
+    # replaced: mppi_panoptex_3 (2026-09-09) logged `refuge goal ended with
+    # status 6` seven milliseconds after `navigating -> refuge`, and the
+    # supervisor then "stayed put" -- in the lane, while carter1 pushed the
+    # X3 five metres north. Every goal change now queues the new goal, cancels
+    # the old one, and sends the queued goal from the cancel response.
+    #
+    # How long that queued goal waits for the cancel response before being
+    # sent anyway. A supervisor sitting on an unsent refuge is worse than one
+    # that sends it into the old race, so the wait is bounded and short.
+    cancel_timeout_s: 1.0
+    # A goal that died this soon after being sent, with no feedback from
+    # nav2 and with one of our own cancels unanswered, never ran: it is
+    # re-sent (waypoints twice, hold/refuge once) rather than counted as a
+    # missed waypoint or left parked in the lane.
+    collateral_window_s: 5.0
+    # Retry nav2-rejected waypoint goals (bt_navigator still activating) instead of
+    # counting them missed (2026-09-10).
+    reject_retry_sec: 2.0
+    max_reject_retries: 30

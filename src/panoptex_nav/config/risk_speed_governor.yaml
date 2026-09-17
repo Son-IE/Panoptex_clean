@@ -1,0 +1,55 @@
+# Defaults for panoptex_nav/risk_speed_governor.py -- see that module's
+# docstring for the policy this encodes and DEFAULT_PARAMS for the
+# single source of truth these values are kept in sync with.
+risk_speed_governor:
+  ros__parameters:
+    input_topic: "/risk_perception/world_objects"
+    odom_topic: "odom"
+    speed_limit_topic: "speed_limit"
+    debug_topic: "~/active_cap"
+    map_frame: "map"
+    base_frame: "base_footprint"
+    tf_timeout_sec: 0.1
+    odom_timeout_sec: 1.0
+    publish_rate_hz: 10.0
+    release_hold_s: 0.5
+
+    # Track gating -- applied before any category policy below.
+    min_track_score: 0.15
+    max_track_age_sec: 3.0
+
+    # person: distance-only (people can turn on a dime; don't trust CPA).
+    person_slow_radius_m: 2.0
+    person_slow_pct: 40.0
+    person_crawl_radius_m: 1.0
+    person_crawl_pct: 15.0
+
+    # WP-A, 2026-09-11: any category except person enters the CPA-gated
+    # closing branch below once p_motion clears moving_pmot_min -- a mover
+    # is a mover, the class label never vetoes it (a promoted "table" must
+    # cap just like a "robot"/"wheeled" track -- see module docstring).
+    # static_slow stays restricted to robot/wheeled regardless (Nav2's own
+    # obstacle layer handles static furniture). 0.0 restores the
+    # pre-2026-09-11 robot/wheeled-only gate. 1.0/0.0, not true/false: every
+    # DEFAULT_PARAMS entry is declared as a float (see risk_speed_governor.
+    # py's own DEFAULT_PARAMS comment) -- a bool literal here would mismatch
+    # the DOUBLE type declare_parameter infers from that Python float
+    # default and fail the node's own parameter-override type check at
+    # startup.
+    act_on_any_mover: 1.0
+
+    # any mover (person excluded): CPA-gated when moving, distance-gated
+    # (robot/wheeled only) when static.
+    moving_pmot_min: 0.5
+    robot_ttc_s: 3.0
+    robot_cpa_m: 1.0
+    # 60, not 30: a closing AMR that cannot see the X3 (its scan plane passes
+    # over it) has to be EVADED, and a crawling X3 cannot get out of the way
+    # (2026-09-08 panoptex_2: capped at 30 % from 2.5 m, still hit at 0.17 m).
+    robot_closing_pct: 60.0
+    static_obstacle_slow_radius_m: 1.0
+    static_slow_pct: 60.0
+    min_rel_speed_mps: 0.02
+
+    # Output shaping.
+    min_pct: 15.0

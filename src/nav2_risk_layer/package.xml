@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>nav2_risk_layer</name>
+  <version>0.0.1</version>
+  <description>Nav2 costmap layer for externally generated risk grids.</description>
+  <maintainer email="user-a@example.com">User A</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>nav_msgs</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+    <costmap_2d plugin="${prefix}/plugins.xml"/>
+  </export>
+</package>

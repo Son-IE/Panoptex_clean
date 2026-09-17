@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<!--
+  Two plugin libraries, one description file (exported to BOTH dwb_core and
+  nav2_mppi_controller by CMakeLists.txt -- each loader only picks up the
+  classes whose base_class_type it owns, so sharing the file is safe).
+-->
+<class_libraries>
+
+  <library path="predicted_risk_critic">
+    <class
+      name="panoptex_nav::PredictedRiskCritic"
+      type="panoptex_nav::PredictedRiskCritic"
+      base_class_type="dwb_core::TrajectoryCritic">
+      <description>
+        DWB trajectory critic that scores candidate trajectory poses against a
+        time-layered predictive risk field (panoptex_msgs/RiskStack), indexing the
+        risk grid by each pose's own time offset.
+      </description>
+    </class>
+  </library>
+
+  <library path="panoptex_nav_mppi_critic">
+    <!--
+      nav2_mppi_controller's CriticManager resolves every entry of the
+      `critics:` list as "mppi::critics::" + <name> (critic_manager.cpp's
+      getFullName(), Humble), so an out-of-tree critic can only be reached
+      under a lookup name in that namespace. The lookup NAME below is
+      therefore mppi::critics::PredictedRiskCritic while the actual class
+      TYPE is panoptex_nav::PredictedRiskMppiCritic -- pluginlib is happy
+      with name != type, and this is the only way to list the critic as
+      "PredictedRiskCritic" in the params file.
+    -->
+    <class
+      name="mppi::critics::PredictedRiskCritic"
+      type="panoptex_nav::PredictedRiskMppiCritic"
+      base_class_type="mppi::critics::CriticFunction">
+      <description>
+        MPPI critic that scores whole trajectory rollouts against a time-layered
+        predictive risk field (panoptex_msgs/RiskStack), indexing the risk grid by
+        each rollout step's own time offset. Additive cost, never a fail_flag.
+      </description>
+    </class>
+    <!-- Same class under its natural name, for direct pluginlib loads (tests). -->
+    <class
+      name="panoptex_nav::PredictedRiskMppiCritic"
+      type="panoptex_nav::PredictedRiskMppiCritic"
+      base_class_type="mppi::critics::CriticFunction">
+      <description>
+        Alias of mppi::critics::PredictedRiskCritic under its fully qualified
+        C++ name.
+      </description>
+    </class>
+  </library>
+
+</class_libraries>

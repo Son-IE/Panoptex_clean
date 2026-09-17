@@ -1,0 +1,565 @@
+# nav2 params for the X3 sim, PANOPTEX_MPPI study arm: the risk-aware arm of
+# WP2 -- MPPI over a 6 s horizon with panoptex_nav::PredictedRiskMppiCritic
+# scoring every rollout step against the time-layered /risk_stack, plus the
+# predictive risk + learned-lane costmap layers and the speed governor.
+#
+# Why MPPI and not DWB: DWB samples constant-velocity arcs over ~3 s, so it can
+# only "go slower on the same path" -- avoid_panoptex_1-4 (2026-09-09) showed
+# the stack predicting carter1 correctly while DWB stopped IN the Carter's
+# lane. MPPI optimises a whole velocity sequence, so "decelerate now, pass
+# behind the mover at t=3 s" scores against the layer where the mover has
+# already gone, and motion_model Omni lets the mecanum base strafe out of a
+# lane instead of only braking in it.
+#
+# Derived from config/nav2_x3_panoptex.yaml (the DWB panoptex arm): every block
+# except controller_server.FollowPath and the risk_layer topic/max_cost is
+# byte-identical to it. Against config/nav2_x3_baseline_mppi.yaml this file
+# adds ONLY risk_layer + lane_layer (global_costmap), the PredictedRiskCritic
+# entry and its flat dotted keys under FollowPath, and
+# controller_server.speed_limit_topic -- tools/check_arm_params.py enforces
+# that and runs under colcon test (`check_arm_params_mppi`).
+#
+# use_sim_time is True everywhere: this file is only ever launched against
+# Isaac Sim (x3_nav.launch.py asserts ROS_DOMAIN_ID=44 for exactly this
+# reason -- see the yahboomcar_ws sim contract note in the launch file).
+
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: scan
+    map_topic: map
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    # 12.0 / 0.15, not the tb3 vendor's 100.0 / -1.0: the sim RTX lidar mirrors
+    # the real A1 at 0.15-12 m.
+    laser_max_range: 12.0
+    laser_min_range: 0.15
+    laser_model_type: "likelihood_field"
+    max_beams: 180
+    max_particles: 2000
+    min_particles: 500
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    # Omni, not DifferentialMotionModel: the sim X3 is a true holonomic
+    # mecanum base and this waypoint loop has strafing-adjacent legs.
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.1
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.1
+    update_min_d: 0.1
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    # Baked spawn pose (same as risk_perception/config/amcl_sim.yaml): the sim
+    # X3 always starts at the stage spawn, so AMCL seeds itself and no manual
+    # /initialpose ("2D Pose Estimate") is needed before the first goal.
+    set_initial_pose: true
+    initial_pose:
+      x: 0.70
+      y: 0.05
+      z: 0.0
+      yaw: 0.0
+    always_reset_initial_pose: false
+
+amcl_map_client:
+  ros__parameters:
+    use_sim_time: True
+
+amcl_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: odom
+    default_bt_xml_filename: "navigate_to_pose_w_replanning_and_recovery.xml"
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+
+bt_navigator_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    controller_plugins: ["FollowPath"]
+    # Panoptex-only: risk_speed_governor (WP3.x) publishes nav2_msgs/SpeedLimit
+    # on this topic; controller_server scales its max speed down when the
+    # risk stack says the near-term path is getting hot. Baseline arm has no
+    # publisher for this topic, so it's simply never invoked there -- this
+    # key is one of the sanctioned baseline/panoptex diffs (see
+    # tools/check_arm_params.py).
+    speed_limit_topic: "speed_limit"
+
+    # MPPI parameters (nav2_mppi_controller). The horizon is 60 steps x
+    # 0.1 s = 6.0 s, deliberately equal to the /risk_stack horizon that WP3
+    # publishes (21 layers x 0.3 s) so the last rollout step still reads a
+    # real layer instead of the clamped end of the stack. batch_size 1000 at
+    # 10 Hz is comfortable on this box (the risk critic itself costs ~2.5 ms
+    # for the full 1000 x 60 grid, see test_predicted_risk_mppi_critic).
+    #
+    # Velocity limits mirror the DWB arms exactly (0.26 m/s, 1.0 rad/s, with
+    # lateral motion enabled -- the sim X3 is a true holonomic mecanum base),
+    # so the two controllers are compared at the same speed envelope.
+    # vx_min is only slightly negative: reversing is allowed as an escape,
+    # not as a routine manoeuvre (the X3 has no rear-facing sensing).
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 60
+      model_dt: 0.1
+      batch_size: 1000
+      vx_std: 0.15
+      vy_std: 0.15
+      wz_std: 0.3
+      vx_max: 0.26
+      vx_min: -0.05
+      vy_max: 0.26
+      wz_max: 1.0
+      iteration_count: 1
+      prune_distance: 3.0
+      transform_tolerance: 0.2
+      temperature: 0.3
+      gamma: 0.015
+      # Omni: strafing is the manoeuvre DWB could not express (see the header).
+      motion_model: "Omni"
+      visualize: false
+      TrajectoryVisualizer.trajectory_step: 5
+      TrajectoryVisualizer.time_step: 3
+      # Unused with motion_model Omni; kept so the block matches nav2's own
+      # reference config and switching motion models needs no new keys.
+      AckermannConstraints.min_turning_r: 0.2
+      # PreferForwardCritic is deliberately ABSENT: on a holonomic base it
+      # penalises exactly the sideways escape this arm exists to enable.
+      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PredictedRiskCritic"]
+      ConstraintCritic.enabled: true
+      ConstraintCritic.cost_power: 1
+      ConstraintCritic.cost_weight: 4.0
+      # ObstaclesCritic works off the local costmap (lidar obstacle_layer +
+      # static_layer + inflation), i.e. the reactive half of the stack -- the
+      # same information DWB's BaseObstacle critic had. collision_margin_distance
+      # 0.10 m on a 0.15 m-radius base; consider_footprint false keeps the
+      # 1000 x 60 collision checks cheap (the base is near-circular anyway).
+      ObstaclesCritic.enabled: true
+      ObstaclesCritic.cost_power: 1
+      ObstaclesCritic.cost_weight: 1.0
+      ObstaclesCritic.repulsion_weight: 1.5
+      ObstaclesCritic.critical_weight: 20.0
+      ObstaclesCritic.consider_footprint: false
+      ObstaclesCritic.collision_cost: 10000.0
+      ObstaclesCritic.collision_margin_distance: 0.10
+      ObstaclesCritic.near_goal_distance: 0.5
+      GoalCritic.enabled: true
+      GoalCritic.cost_power: 1
+      GoalCritic.cost_weight: 5.0
+      GoalCritic.threshold_to_consider: 1.4
+      GoalAngleCritic.enabled: true
+      GoalAngleCritic.cost_power: 1
+      GoalAngleCritic.cost_weight: 3.0
+      GoalAngleCritic.threshold_to_consider: 0.5
+      # offset_from_furthest 20 / trajectory_point_step 4: align to the path
+      # well ahead of the robot and sample every 4th rollout point -- the
+      # combination that lets a rollout leave the path for a few metres (to
+      # dodge a mover) without being clawed straight back onto it.
+      # use_path_orientations false: NavFn's plan carries no meaningful
+      # heading for an omni base.
+      PathAlignCritic.enabled: true
+      PathAlignCritic.cost_power: 1
+      PathAlignCritic.cost_weight: 14.0
+      PathAlignCritic.max_path_occupancy_ratio: 0.05
+      PathAlignCritic.trajectory_point_step: 4
+      PathAlignCritic.threshold_to_consider: 0.5
+      PathAlignCritic.offset_from_furthest: 20
+      PathAlignCritic.use_path_orientations: false
+      PathFollowCritic.enabled: true
+      PathFollowCritic.cost_power: 1
+      PathFollowCritic.cost_weight: 5.0
+      PathFollowCritic.offset_from_furthest: 5
+      PathFollowCritic.threshold_to_consider: 1.4
+      # Humble's PathAngleCritic has no `mode` key (that arrived in a later
+      # nav2); forward_preference: true IS mode 0 (FORWARD_PREFERENCE) here.
+      PathAngleCritic.enabled: true
+      PathAngleCritic.cost_power: 1
+      PathAngleCritic.cost_weight: 2.0
+      PathAngleCritic.offset_from_furthest: 4
+      PathAngleCritic.threshold_to_consider: 0.5
+      PathAngleCritic.max_angle_to_furthest: 1.0
+      PathAngleCritic.forward_preference: true
+      # panoptex_nav::PredictedRiskMppiCritic -- the WP2 deliverable. Scores
+      # rollout step j (t = j * model_dt) against the /risk_stack layer that
+      # covers that same instant, so a rollout may legally cross a cell that is
+      # lethal NOW as long as it gets there after the hazard has moved on. See
+      # panoptex_nav/README.md's "PredictedRiskMppiCritic" section for the
+      # parameter table and the fail-soft rules.
+      #
+      # NOTE the name: nav2_mppi_controller's CriticManager resolves every
+      # entry of `critics:` as "mppi::critics::" + <name>, so this plugin is
+      # registered under the lookup name mppi::critics::PredictedRiskCritic
+      # (plugins.xml) even though its C++ type is
+      # panoptex_nav::PredictedRiskMppiCritic. The `.class` key below is
+      # documentation only -- unlike DWB, MPPI has no such key.
+      PredictedRiskCritic.class: "panoptex_nav::PredictedRiskMppiCritic"
+      PredictedRiskCritic.enabled: true
+      # WP-B (2026-09-10): the critic now scores the SPATIOTEMPORAL RISK MAP
+      # (Thomas et al., 2021) on /risk_stack_srm, not the raw class/confidence
+      # /risk_stack. Same wire type, different value semantics: every cell is
+      # a DISTANCE risk in [0, 1] -- 1 on an occupied core, linearly down to 0
+      # at d0 = 1.5 m -- published as a window around the robot, 21 layers x
+      # 0.3 s. That single change is what makes the numbers below differ from
+      # the WP2 ones they replace.
+      PredictedRiskCritic.topic: "/risk_stack_srm"
+      # cost_weight 15 is the bench-chosen value (results/avoidance/bench_srm.md,
+      # ROS_DOMAIN_ID=199): the SMALLEST of {15, 30, 60} that keeps the crossing
+      # case's hazard-robot min distance >= 0.6 m (it gives 1.68 m) without more
+      # than doubling the no-hazard time-to-goal (20.9 s vs 14.9 s = 1.40x).
+      # 30 and 60 buy no extra clearance (1.66 / 1.70 m) and only cost time.
+      # Note it is NOT comparable to the old 5.0: a squared SRM (cost_power 2)
+      # is a much smaller number per pose than a raw 0.3-ish class risk, so the
+      # product lands in the same band as PathAlignCritic's 14.
+      PredictedRiskCritic.cost_weight: 15.0
+      # cost_power 2 on a linear distance field = a quadratic clearance
+      # penalty: grazing the comet's edge is nearly free, and the gradient
+      # steepens exactly where clearance is being lost.
+      PredictedRiskCritic.cost_power: 2.0
+      # 0.97/s over a 6 s horizon: the last layer still carries 83% weight, so
+      # "brake now to pass behind at t = 4 s" is a real option (0.95 left it
+      # at 74% and biased the optimizer towards near-term-only reasoning).
+      PredictedRiskCritic.time_discount: 0.97
+      # Replaces lethal_threshold. On the SRM this is a DISTANCE statement, not
+      # a class-confidence one: 0.90 with d0 = 1.5 m means "within 0.15 m of an
+      # occupied core". The old name is still read as a deprecated alias (one
+      # warning at startup) so an older params file keeps working.
+      # 0.6, not 0.9: the SRM core equals the stack's consequence-weighted occupancy
+      # (mobile robot 0.75, cart 0.65, person 0.90) -- see risk_perception/srm.py.
+      PredictedRiskCritic.collision_threshold: 0.6
+      # Half ObstaclesCritic's 10000: a PREDICTED collision is expensive but
+      # still cheaper than a live one against the costmap.
+      PredictedRiskCritic.collision_cost: 5000.0
+      # Escape rule, in time: the first 0.3 s of every rollout is unscored, so
+      # a robot standing in a hot cell always keeps a way out (the DWB
+      # equivalent of this stopped 263 aborted goals on 2026-09-09).
+      PredictedRiskCritic.skip_first_s: 0.3
+      # Escape rule, in space: a pose within 0.3 m of the rollout's own first
+      # pose can never be charged collision_cost. With a smooth SRM the robot
+      # can end up standing at srm > 0.9 (a mover pushed into it); without
+      # this every rollout is charged the same 5000, the softmax goes flat and
+      # the robot freezes. Same value and rationale as the DWB critic's.
+      PredictedRiskCritic.escape_radius_m: 0.3
+      PredictedRiskCritic.stale_timeout_s: 2.0
+      PredictedRiskCritic.risk_frame: "map"
+      PredictedRiskCritic.warn_period_s: 5.0
+
+controller_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+# velocity_smoother is load-bearing: nav2_bringup's navigation_launch.py
+# remaps controller_server's cmd_vel -> cmd_vel_nav, then this node's
+# cmd_vel_nav -> cmd_vel. Drop it from the lifecycle and the robot stops
+# silently, with no error. y components enabled to match the DWB lateral
+# limits above (mecanum sim base).
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.26, 0.26, 1.0]
+    min_velocity: [-0.26, -0.26, -1.0]
+    max_accel: [2.5, 2.5, 3.2]
+    max_decel: [-2.5, -2.5, -3.2]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      robot_radius: 0.15
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.35
+        cost_scaling_factor: 5.0
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        # depth (WP5): the A1 lidar's scan plane sits at a fixed 0.11 m and
+        # misses low pallets/rack shields under it (map z-band vs. the single
+        # scan plane -- the shelf-stall trap in memory); RGB-D covers that gap.
+        observation_sources: scan depth
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          # Humble's real range keys, replacing the ROS1 raytrace_range key
+          # (silently ignored by nav2_costmap_2d::ObstacleLayer in Humble).
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 12.0
+          obstacle_min_range: 0.1
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+        depth:
+          topic: /camera/camera/depth/points
+          data_type: "PointCloud2"
+          marking: True
+          clearing: True
+          min_obstacle_height: 0.05
+          max_obstacle_height: 0.60
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.2
+          expected_update_rate: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      always_send_full_costmap: True
+  local_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  local_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      robot_radius: 0.15
+      resolution: 0.05
+      # PANOPTEX_MPPI arm: risk_layer AND lane_layer added. Compare to
+      # nav2_x3_baseline_mppi.yaml's plugins list (no risk_layer, no
+      # lane_layer -- pure lidar).
+      plugins: ["static_layer", "obstacle_layer", "risk_layer", "lane_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          # Humble's real range keys, replacing the ROS1 raytrace_range key
+          # (silently ignored by nav2_costmap_2d::ObstacleLayer in Humble).
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 12.0
+          obstacle_min_range: 0.1
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      # risk_perception's PLANNER risk grid (predictive_risk_costmap_node
+      # -> /risk_costmap_planner, in the `map` frame -- matches this
+      # costmap's global_frame above). Placed before inflation_layer so the
+      # inflation gradient also spreads around graded-risk cells, not just
+      # hard lidar obstacles. max_cost 140 is deliberately SUB-LETHAL (lethal
+      # is 254): NavFn's Dijkstra search prefers routes around a cost-140
+      # cell but is not forced off a predicted path entirely, since 140 is
+      # still finite-cost and traversable when there's no better option --
+      # unlike a hard lidar obstacle, a predicted-risk cell may clear before
+      # the robot actually gets there.
+      # WP2/WP3: the MPPI arm points this layer at the swept PLANNER grid
+      # (moving hypothesis swept over the whole horizon, flow-blended, barely
+      # discounted) instead of the collapsed /risk_costmap_predictive the DWB
+      # arm reads -- the route must leave a mover's predicted lane EARLY,
+      # while the near-term reaction is the MPPI critic's job on /risk_stack.
+      risk_layer:
+        plugin: "nav2_risk_layer::RiskLayer"
+        enabled: True
+        topic: /risk_costmap_planner
+        max_cost: 140
+        min_risk_value: 3
+      # Learned AMR lanes (spatial_prior_node's S channel, warmed up by
+      # Carter patrol traffic -- see tools/warmup_lanes.sh): a SECOND
+      # RiskLayer instance, separate from risk_layer above, reading
+      # /risk_perception/spatial_prior instead of the predictive costmap.
+      # Deliberately sub-lethal (max_cost 90, well under risk_layer's 140 and
+      # both well under lethal 254) so NavFn's Dijkstra search stops
+      # ROUTING ALONG a learned lane (traveling parallel to AMR traffic down
+      # its own lane) while a PERPENDICULAR crossing of that same lane stays
+      # cheap -- crossing touches a lane cell for one grid cell's width,
+      # traveling along it touches many, so the same per-cell cost penalizes
+      # the along-lane path far more than the crossing one without an
+      # explicit direction term.
+      lane_layer:
+        plugin: "nav2_risk_layer::RiskLayer"
+        enabled: True
+        topic: /risk_perception/spatial_prior
+        max_cost: 90
+        min_risk_value: 5
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.35
+      always_send_full_costmap: True
+  global_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  global_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: "yahboomcar.yaml"
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5000
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+planner_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+      spin_type: "SPIN_IN_PLACE"
+      rotation_velocity: 1.0
+      max_rotational_vel: 1.0
+      min_rotational_vel: 0.4
+      rotational_acc_lim: 3.2
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+      backup_speed: -0.2
+      backup_duration: 2.0
+      simulate_ahead_time: 2.0
+    wait:
+      plugin: "nav2_behaviors/Wait"
+      wait_duration: 5.0
+    global_frame: odom
+    robot_base_frame: base_footprint
+    transform_timeout: 0.1
+    use_sim_time: True
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: True
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      # waypoint_pause_duration is MILLISECONDS (nav2_waypoint_follower/plugins/
+      # wait_at_waypoint.hpp:72-73), so 200 = 0.2s. This is also nav2's own
+      # stock value. It reads alarming; it is not a bug, don't "fix" it.
+      waypoint_pause_duration: 200

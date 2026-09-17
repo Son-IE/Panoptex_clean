@@ -1,0 +1,90 @@
+# amcl_sim.yaml
+#
+# AMCL tuning for the simulated X3 (Isaac Sim, RTX lidar, warehouse stage),
+# used by robot_base.launch.py's `amcl_params` arg from panoptex_sim.launch.py
+# (map_yaml:=warehouse/maps/warehouse_x3_nav.yaml). This is the `amcl:` block
+# from warehouse/x3_sim/tests/amcl_tuned_params.yaml (Omni motion model, 180
+# beams, 12 m max range, sigma_hit 0.1 -- see that file's header for why each
+# tuned value differs from the yahboomcar_ws default), verified HEADLESSLY in
+# the warehouse repo: 0.084 m mean / 0.234 m max error over a 90 s scripted
+# drive against maps/warehouse_x3_nav.yaml (X3_NAV_PARAMS_FILE=
+# x3_sim/tests/amcl_tuned_params.yaml ./x3_sim/tests/integration_amcl.sh).
+#
+# Differences from that file, specific to this use (a fixed sim stage rather
+# than a driven-in AMCL that starts from a published /initialpose):
+#   - use_sim_time: true              -- Isaac Sim's /clock, not wall time.
+#   - set_initial_pose: true + the X3's spawn pose in the stage/map frame
+#     (8.0, -6.0, yaw 0.0 -- stage /Root origin == map origin, the same
+#     contract the overhead-camera extrinsics rely on; moved from (0.70, 0.05)
+#     2026-09-13 to match the Complex_Scene_ForkliftNavMesh.usd spawn point,
+#     see warehouse/x3_sim/build_x3_graphs.py's X3_POSITION -- keep both in
+#     sync, this is the SAME "AMCL believes the wrong start pose" landmine
+#     that bit the first complex-scene ablation rep: baked initial_pose
+#     stale relative to the scene's actual spawn -> AMCL localizes the
+#     robot onto a wall pixel, scan/local costmap read as if still at the
+#     old spawn, every subsequent Nav2 plan fails) -- there is no
+#     amcl_monitor.py here to publish /initialpose on startup, so AMCL must
+#     seed itself or it starts with a spread-over-the-whole-map particle
+#     cloud and needs the robot to move before it converges.
+#   - always_reset_initial_pose: false -- do not re-snap to the baked pose on
+#     a later `ros2 param set`/reconfigure; once converged, trust the filter.
+#
+# MUST be launched with use_sim_time:=true throughout the stack (robot_base
+# .launch.py's amcl node parameter, /clock, /tf, /scan): AMCL timestamps its
+# particle filter updates against the message stamp, and a wall-clock/sim-
+# clock mismatch (the sim runs at ~0.55-0.9x) desyncs convergence the same
+# way it would desync RViz TF lookups. If the X3 was driven before this
+# launches, the baked initial pose is stale -- use RViz "2D Pose Estimate"
+# once instead of restarting.
+#
+# No map_server: block here -- robot_base.launch.py passes yaml_filename
+# itself via the `map_yaml` launch arg, same as the lab amcl.yaml.
+
+amcl:
+  ros__parameters:
+    use_sim_time: true
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: scan
+    map_topic: map
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 12.0
+    laser_min_range: 0.15
+    laser_model_type: "likelihood_field"
+    max_beams: 180
+    max_particles: 2000
+    min_particles: 500
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.1
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.1
+    update_min_d: 0.1
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    set_initial_pose: true
+    initial_pose:
+      x: 8.0
+      y: -6.0
+      z: 0.0
+      yaw: 0.0
+    always_reset_initial_pose: false

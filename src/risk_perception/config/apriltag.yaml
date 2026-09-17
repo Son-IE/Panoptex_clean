@@ -1,0 +1,64 @@
+# apriltag.yaml
+#
+# Config for apriltag_ros (christianrauch/apriltag_ros, packaged as
+# ros-humble-apriltag-ros) running on the global/overhead camera. Detects
+# floor tags 1/2/3 (used by global_cam_survey + global_cam_calibrator for
+# extrinsic calibration) and tag 0 on the robot (global_cam_localizer).
+#
+# Structure and parameter names follow the package's own shipped
+# cfg/tags_36h11.yaml. The `/**:` wildcard matches whatever node name the
+# launch file uses, so this file keeps working if that name changes.
+#
+# NOTE ON RAW vs. RECTIFIED: despite the node's `image_rect` topic name, we
+# feed it the RAW image (see global_cam.launch.py). Our own nodes then run
+# solvePnP with the full K + distortion coefficients, which is only correct
+# on unrectified pixels. Feeding a rectified image while using distorted
+# intrinsics would double-correct and bias every solve -- with this camera's
+# coefficients that is a ~15 px error near the frame edges, so it matters.
+#
+# The node also needs CameraInfo; image_transport's CameraSubscriber derives
+# that topic from the image topic's namespace automatically
+# (/global_cam/image_raw -> /global_cam/camera_info), so it is not remapped
+# explicitly in the launch file.
+
+/**:
+  ros__parameters:
+    image_transport: raw
+    family: 36h11
+    size: 0.115              # metres -- must match floor_tags.yaml tag_size_m
+    max_hamming: 0
+    # MUST be sensor_data, not the upstream default. global_cam_bridge_node
+    # publishes /global_cam/image_raw BEST_EFFORT (see its IMAGE_QOS comment);
+    # a RELIABLE subscriber is QoS-incompatible with a BEST_EFFORT publisher,
+    # so with `default` here the node connects, logs nothing, and silently
+    # receives zero images -- /global_cam/apriltag/detections stays empty
+    # forever. sensor_data (BEST_EFFORT) matches the image, and still reads
+    # the RELIABLE /global_cam/camera_info fine (a BEST_EFFORT reader accepts
+    # a RELIABLE writer, not the other way round).
+    qos_profile: sensor_data
+
+    detector:
+      threads: 2
+      # decimate downsamples before quad detection. The upstream default of
+      # 2.0 is a speed/accuracy trade; keep it at 1.0 here because corner
+      # precision drives the whole extrinsic calibration.
+      decimate: 1.0
+      blur: 0.0
+      refine: true
+      sharpening: 0.25
+      debug: false
+
+    # The node's own pose estimate (published as TF) is handy for eyeballing
+    # detections in RViz, but nothing in this pipeline consumes it -- the
+    # calibrator, survey and localizer nodes each run their own solvePnP
+    # from the raw corner pixels.
+    pose_estimation_method: "pnp"
+
+    tag:
+      ids: [0, 1, 2, 3]
+      frames: [tag0, tag1, tag2, tag3]
+      # tag 0 (on the robot) is 76 mm; the floor tags are 115 mm. These feed
+      # only apriltag_ros's OWN pose estimate, which nothing here consumes --
+      # the sizes that actually matter are tag_size_m / tag0_size_m in
+      # floor_tags.yaml. Kept accurate so the TF it publishes isn't misleading.
+      sizes: [0.076, 0.115, 0.115, 0.115]

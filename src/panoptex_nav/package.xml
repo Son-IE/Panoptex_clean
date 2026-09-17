@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>panoptex_nav</name>
+  <version>0.0.1</version>
+  <description>Nav2 consumers of Panoptex perception: the DWB PredictedRiskCritic and the MPPI PredictedRiskMppiCritic (time-indexed RiskStack scoring), the risk_speed_governor SpeedLimit node, the baseline/panoptex arm params and the x3_nav switch launch.</description>
+  <maintainer email="user-b@example.com">User B</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>nav2_util</depend>
+  <depend>nav2_core</depend>
+  <depend>nav2_costmap_2d</depend>
+  <depend>dwb_core</depend>
+  <depend>dwb_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>pluginlib</depend>
+  <depend>nav2_mppi_controller</depend>
+  <depend>xtensor</depend>
+  <depend>panoptex_msgs</depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
+  <!-- mission_supervisor's ~/observed_lanes LINE_LIST debug markers. -->
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>risk_perception</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <dwb_core plugin="${prefix}/plugins.xml"/>
+    <nav2_mppi_controller plugin="${prefix}/plugins.xml"/>
+  </export>
+</package>

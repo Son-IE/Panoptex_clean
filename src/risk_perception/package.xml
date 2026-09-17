@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>risk_perception</name>
+  <version>0.0.0</version>
+  <description>ROS2 perception nodes for scene understanding and risk-aware navigation. Translate from incoming observations, into association, tracking, canonical labels, static/dynamic classification, uncertainty, scene relations. It outputs persistent objects and labels. (/objects and /markers)</description>
+  <maintainer email="user-a@example.com"> User A </maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>message_filters</depend>
+  <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
+  <depend>apriltag_ros</depend>
+  <depend>apriltag_msgs</depend>
+  <depend>image_proc</depend>
+  <depend>robot_localization</depend>
+  <depend>nav2_map_server</depend>
+  <depend>nav2_amcl</depend>
+  <depend>nav2_lifecycle_manager</depend>
+
+  <exec_depend>panoptex_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

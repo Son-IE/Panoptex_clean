@@ -1,0 +1,591 @@
+# nav2_sim.yaml
+#
+# Nav2 parameters for the Isaac Sim warehouse X3, with nav2_risk_layer wired
+# into the global costmap. Loaded by panoptex_sim.launch.py's enable_nav2:=true
+# (which threads it into yahboomcar_nav's navigation_dwa_launch.py ->
+# nav2_bringup's bringup_launch.py), or passable by hand as params_file:=.
+#
+# Derived from yahboomcar_nav's params/dwa_nav_params.yaml (the lab/hardware
+# tuning, which already carries the risk_layer block) with three sim deltas:
+#
+#   1. The `amcl:` block is config/amcl_sim.yaml's, not dwa_nav_params.yaml's.
+#      Nav2's bringup_launch.py ALWAYS includes localization_launch.py when
+#      slam:=false (its default), so Nav2 runs its OWN map_server + amcl from
+#      the block below -- panoptex_sim.launch.py therefore skips its
+#      robot_base.launch.py localization when enable_nav2:=true, exactly as
+#      panoptex_pc.launch.py does on hardware. Carrying amcl_sim.yaml's tuning
+#      here (OmniMotionModel -- the sim X3 really strafes -- 180 beams, 12 m A1
+#      range, sigma_hit 0.1, and the X3 spawn pose baked in) is what makes that
+#      deferral free. Keep this block in sync with config/amcl_sim.yaml.
+#
+#   2. `use_sim_time: True` throughout. Every one of these is also rewritten at
+#      load time by nav2_bringup's RewrittenYaml from the launch-time
+#      use_sim_time argument, which wins regardless -- they are written true
+#      here so that reading the file does not misdescribe the sim stack (same
+#      reasoning, opposite default, as exploration_nav_params_sim.yaml's note).
+#
+#   3. The global obstacle_layer's stale `raytrace_range` key is replaced with
+#      Nav2's actual ones (see that block).
+#
+# NOT changed from dwa_nav_params.yaml, on purpose:
+#   - No RGB-D voxel_layer. exploration_nav_params_sim.yaml adds one fed by
+#     /camera/camera/depth/points; obstacle avoidance here stays 2D-lidar only,
+#     matching dwa_nav_params.yaml, so that the only difference the risk layer
+#     has to explain is the risk layer. Copy that file's `voxel_layer:` blocks
+#     in (and add "voxel_layer" to both `plugins:` lists) if you want it.
+#   - No mecanum strafing in DWB. The sim X3 is a true holonomic base and
+#     exploration_nav_params_sim.yaml enables lateral motion for it; the risk
+#     layer acts on the GLOBAL costmap (NavFn's plan bowing around risk), so
+#     the local planner is left at the lab tuning to keep the comparison clean.
+#
+# THE RISK LAYER NEEDS THE PANOPTEX OVERLAY SOURCED. Costmap plugins load
+# in-process: if install/setup.bash from this workspace is not on
+# AMENT_PREFIX_PATH in the launching terminal, pluginlib cannot find
+# nav2_risk_layer::RiskLayer, global_costmap never activates, planner_server
+# never activates, and the whole Nav2 lifecycle stalls silently -- for a reason
+# that looks nothing like a costmap problem. ~/.bashrc already sources it; note
+# that warehouse/env_sim.sh does NOT (it sources ROS + yahboomcar_ws +
+# carter_ws only), so it relies on the overlay already being on the path.
+#
+# The layer is inert, not broken, when nothing publishes its topic
+# (risk_layer.cpp: has_map_ starts false and both update hooks early-return on
+# it, while current_ stays true so the costmap is never marked stale). Run
+# panoptex_sim.launch.py on the same domain (55) to feed it.
+
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: scan
+    map_topic: map
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 12.0
+    laser_min_range: 0.15
+    laser_model_type: "likelihood_field"
+    max_beams: 180
+    max_particles: 2000
+    min_particles: 500
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.1
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.1
+    update_min_d: 0.1
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    # The X3's spawn pose in the stage (stage /Root origin == map origin, the
+    # same contract the overhead-camera extrinsics rely on). There is no tag 0
+    # in sim to seed from, so AMCL seeds itself; if the X3 was driven before
+    # this launches the baked pose is stale -- click "2D Pose Estimate" once.
+    # run_trials.py's Isaac-per-trial cycling has the same problem by design
+    # (see its docstring): re-publish /initialpose between trials.
+    set_initial_pose: true
+    initial_pose:
+      x: 8.0
+      y: -6.0
+      z: 0.0
+      yaw: 0.0
+    always_reset_initial_pose: false
+
+amcl_map_client:
+  ros__parameters:
+    use_sim_time: True
+
+amcl_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: odom
+    default_bt_xml_filename: "navigate_to_pose_w_replanning_and_recovery.xml"
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+
+bt_navigator_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    # 0.5 was the lab value and would zero out every lateral odometry reading
+    # now that the base strafes (max_vel_y 0.40 below).
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    # WITHOUT THIS, nav2 Humble defaults to 0.0 = abort the whole goal the
+    # first controller cycle that cannot produce a command. Against a Carter
+    # crossing the aisle that is guaranteed: DWB is briefly boxed in, returns
+    # no valid trajectory, and the goal aborts instead of waiting the ~1 s it
+    # takes the obstacle to clear. 1.0 s of tolerance turns "stuck / aborted"
+    # into "paused, then continued".
+    failure_tolerance: 1.0
+    controller_plugins: ["FollowPath"]
+    # Both were unset, so nav2 fell back to compiled defaults. Pinned here so
+    # the stall criterion is visible: fail the goal only after 10 s without
+    # 0.5 m of progress, rather than whatever a future nav2 defaults to.
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+      stateful: True
+
+    # DWB -- lab tuning EXCEPT the speed envelope, raised for the warehouse.
+    # 0.26 m/s is the real X3's driver limit and crawls across a 20 x 30 m hall
+    # (the length of the middle aisle alone is ~17 m = 65 s at 0.26). The sim
+    # X3 is not the real one: x3_sim/x3_base_controller.py sets the chassis
+    # velocity directly with MAX_LINEAR = 1.0 m/s, MAX_ANGULAR = 5.0 rad/s, so
+    # 0.60 is well inside what the model tracks -- and matches what the Nova
+    # Carters were retuned to for this same warehouse (nav/carter_nav_params
+    # .yaml, max_vel_x 0.6). Lower it again if the robot starts cutting
+    # corners; inflation_radius is only 0.11 m, so there is not much margin.
+    #
+    # decel_lim_x was -0.5 (the lab value): at 0.6 m/s that is a 1.2 s stop,
+    # which reads as "kept going after the goal". Matched to acc_lim_x.
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      # STRAFING ENABLED. This is the fix for "drives up to an obstacle and
+      # stops": with max_vel_y 0.0 and vy_samples 0, every trajectory DWB can
+      # sample is forward and/or rotate, so a Carter square in front leaves it
+      # with no non-colliding option that makes progress -- there is literally
+      # no sideways trajectory in the sample set to find.
+      #
+      # The sim X3 is a true holonomic mecanum base (x3_sim/x3_base_controller
+      # .py writes chassis velocity directly, MAX_LINEAR 1.0 m/s; AMCL already
+      # models it with OmniMotionModel), so lateral motion is free here.
+      # exploration_nav_params_sim.yaml enables it for the same reason.
+      # THE REAL ROBOT MUST KEEP max_vel_y: 0.0 -- do not copy this block into
+      # dwa_nav_params.yaml.
+      #
+      # min_vel_x stays 0.0: reversing is left to the behavior_server's
+      # `backup` recovery rather than making every forward plan reversible.
+      min_vel_x: 0.0
+      min_vel_y: -0.40
+      max_vel_x: 0.60
+      max_vel_y: 0.40
+      max_vel_theta: 1.5
+      min_speed_xy: 0.0
+      max_speed_xy: 0.60
+      min_speed_theta: 0.0
+      acc_lim_x: 2.5
+      acc_lim_y: 2.5
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: -2.5
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      # 0 -> 10: the sample grid is vx x vy x vtheta, so vy_samples 0 removed
+      # the entire lateral dimension regardless of max_vel_y.
+      vy_samples: 10
+      vtheta_samples: 40
+      sim_time: 1.5
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      # 0.02 (the vendor/nav2 stock value) against PathDist/PathAlign at 32
+      # means the trajectory score is dominated ~1600:1 by "stay on the global
+      # path" over "do not hit anything" -- the robot tracks the plan through
+      # a moving obstacle rather than around it. BaseObstacleCritic returns the
+      # MAX costmap cost along the trajectory (0-254, sum_scores false), so at
+      # 0.02 its whole dynamic range is ~5 points; at 0.2 it is ~51, i.e. worth
+      # about 1.5 cells of path deviation. Deliberately not larger: this critic
+      # is meant to break ties, and the repulsion proper should come from the
+      # inflation gradient below, not from one critic overpowering the plan.
+      BaseObstacle.scale: 0.2
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+controller_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      # NOT `map`: this costmap is odom-framed, and risk_layer.cpp rejects any
+      # OccupancyGrid whose header.frame_id differs from the costmap's
+      # global_frame. The risk grids are published in `map`, so the risk layer
+      # goes on the global costmap only -- wiring it here would need the grid
+      # re-expressed in odom, which nothing produces.
+      global_frame: odom
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      rolling_window: true
+      # 3 x 3 m (the lab value) gives only 1.5 m of lookahead in any direction.
+      # A Nova Carter closing head-on adds its speed to the X3's, so at 0.6 m/s
+      # each that window is under 1.3 s of warning -- less than the time DWB
+      # needs to stop (0.6 / 2.5 = 0.24 s) plus the 0.1 s controller period,
+      # but not enough to plan around. 6 x 6 m doubles it at 4x the cells,
+      # which is still only 14k cells at 5 Hz.
+      width: 6
+      height: 6
+      resolution: 0.05
+      # 0.1 (the vendor/lab default, dwa_nav_params.yaml) UNDERSIZES the real
+      # X3. From yahboomcar_description's own URDF (yahboomcar_X3.urdf), the
+      # four wheel joints sit at (+-0.08, +-0.0845) m relative to base_link --
+      # a bare wheel-mount radius of hypot(0.08, 0.0845) = 0.1164 m, already
+      # bigger than 0.10 m BEFORE adding the chassis body. Undersizing this
+      # circle means a trajectory DWB scores as fully clear can still clip a
+      # real obstacle in Isaac.
+      #
+      # An earlier pass here set this to 0.18, which turned out to be an
+      # OVERcorrection: against maps/warehouse_x3_nav.pgm, drivable floor area
+      # (clearance >= radius) is flat from 0.12 to 0.15 m (486.8 -> 486.5 m^2)
+      # but falls off a cliff between 0.15 and 0.16 (486.5 -> 474.5 m^2,
+      # -12.4 m^2 in one step) -- there is a real pinch point in the map right
+      # in that band. 0.18 sat past the cliff and cost 25.3 m^2 of previously-
+      # drivable floor versus the old 0.10, concentrated in a handful of
+      # regions around (-0.7, 3.0) / (4.7, 3.4) / (-5.3, 3.6) -- consistent
+      # with a shelf-corner area, and consistent with "no plan at all, robot
+      # stuck near a shelf corner" reports after that change shipped. If NavFn
+      # cannot find ANY path (not just a poor one), planner_server logs
+      # "failed to create plan with tolerance %.2f" -- grep for that line
+      # before assuming it's a local/DWB avoidance problem.
+      #
+      # 0.14 is on the flat part of that curve: 2.4 cm of margin over the
+      # proven 0.1164 m lower bound (vs the old value's 0 cm), while reclaiming
+      # essentially all of the 0.18 value's newly-blocked area. The real
+      # robot's dwa_nav_params.yaml still has the original 0.1 -- not changed
+      # here, sim-only fix, but the same correction (to something in the
+      # 0.12-0.15 band, verified against THAT map, not this one) likely
+      # applies there too.
+      robot_radius: 0.14
+      plugins: ["obstacle_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # Originally raised from 0.11 (which barely exceeded the OLD,
+        # undersized robot_radius of 0.1 -- a cell 12 cm from an obstacle
+        # already cost ~0, so the planner felt nothing until practically
+        # touching). Still correct after robot_radius went to 0.18: 0.35 m
+        # beyond a 0.18 m radius keeps the ~1.0 m-clearance aisles passable
+        # while giving DWB an actual gradient to slide along, matching the
+        # warehouse Carters' same-reasoning retune to 0.55 (they are a bigger
+        # robot -- nav/carter_nav_params.yaml).
+        inflation_radius: 0.35
+        cost_scaling_factor: 3.0
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          # Explicit, and matched to the 6 x 6 m window -- the nav2 defaults
+          # (2.5 m obstacle / 3.0 m raytrace) would have quietly clipped
+          # marking to less than the window is wide.
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.1
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.1
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+      static_layer:
+        map_subscribe_transient_local: True
+      always_send_full_costmap: True
+  local_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  local_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      # `map` -- must match the risk grids' header.frame_id (risk_costmap_node
+      # and predictive_risk_costmap_node both stamp `map`), or risk_layer.cpp
+      # logs "Ignoring risk map in frame ..." and never applies a cell.
+      global_frame: map
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      # Matched to local_costmap's robot_radius -- see that block's note
+      # (0.14, not the earlier overcorrected 0.18). Undersizing this ALSO
+      # shrinks every waypoint's reachability margin: x3_waypoints.yaml's
+      # wp5/wp6 were validated at 0.30 m clearance, which is above both 0.14
+      # and 0.18, so they are unaffected either way. Re-validate that file's
+      # flood-fill margin if robot_radius changes again.
+      robot_radius: 0.14
+      resolution: 0.05
+      plugins: ["static_layer", "obstacle_layer", "risk_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          # dwa_nav_params.yaml writes `raytrace_range: 3.0` here. That is a
+          # ROS 1 / nav2-pre-Foxy key name; Nav2 Humble's ObstacleLayer reads
+          # raytrace_max_range / obstacle_max_range, so the vendor line is a
+          # silent no-op and the layer has been running on Nav2's own defaults
+          # (2.5 m obstacle, 3.0 m raytrace) all along. Spelled correctly here
+          # at exactly those values, so behaviour is unchanged and visible.
+          # The sim A1 is good to 12 m across a 20 x 30 m hall -- raise both if
+          # you want the lidar to clear stale cells further out; the static
+          # layer already carries the warehouse walls either way.
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.1
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.1
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+
+      # risk_perception's semantic risk field, in the `map` frame (matches
+      # global_frame above). Placed before inflation_layer so the inflation
+      # gradient spreads around graded-risk cells too, not just hard lidar
+      # obstacles.
+      #
+      # THE TWO ABLATION KNOBS, both driven by panoptex_sim.launch.py args so
+      # a condition never means hand-editing this file (see run_trials.py's
+      # --condition-prefix: baseline / each ablation arm / full system):
+      #
+      #   enabled  <- risk_layer_enabled:=   false is the BASELINE arm: stock
+      #              Nav2, layer loaded but contributing nothing. Note this is
+      #              not the same as deleting the layer -- keeping it loaded
+      #              keeps pluginlib, the costmap's layer count and the update
+      #              cycle identical across arms, so the only thing that varies
+      #              is whether it writes cost.
+      #   topic    <- risk_topic:=
+      #              /risk_costmap             reactive   risk_costmap_node
+      #              /risk_costmap_predictive  predictive predictive_risk_
+      #                                        costmap_node (prediction +
+      #                                        class consequence + CPA/TTC)
+      #
+      # NEVER point this at /risk_costmap_reference. That grid is
+      # evaluation_reference.launch.py's fixed full-system yardstick, scoring
+      # only -- feeding it to Nav2 would make every ablation arm plan against
+      # the same field and collapse the study (see that file's docstring).
+      #
+      # Both driving nodes publish TRANSIENT_LOCAL, matching this layer's
+      # transient_local+reliable subscription.
+      #
+      # max_cost 200 stays below LETHAL_OBSTACLE (254) and INSCRIBED (253) on
+      # purpose: risk deflects the plan, it never fabricates an obstacle the
+      # planner must treat as impassable. min_risk_value 1 means any non-zero
+      # cell in the grid contributes.
+      risk_layer:
+        plugin: "nav2_risk_layer::RiskLayer"
+        enabled: True
+        topic: /risk_costmap
+        max_cost: 200
+        min_risk_value: 1
+
+      # Matched to local_costmap's (see the note there). This changes BOTH
+      # ablation arms identically, so the baseline-vs-risk comparison stays
+      # valid -- but it does move the baseline, so re-run any arm you already
+      # recorded against the old 0.11.
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.35
+      always_send_full_costmap: True
+  global_costmap_client:
+    ros__parameters:
+      use_sim_time: True
+  global_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: True
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    # Overridden at load time by the `map` launch argument (nav2_bringup
+    # rewrites yaml_filename), which panoptex_sim.launch.py feeds from its
+    # map_yaml -- warehouse/maps/warehouse_x3_nav.yaml by default.
+    yaml_filename: "warehouse_x3_nav.yaml"
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5000
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+planner_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+      spin_type: "SPIN_IN_PLACE"
+      rotation_velocity: 1.0
+      max_rotational_vel: 1.0
+      min_rotational_vel: 0.4
+      rotational_acc_lim: 3.2
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+      backup_speed: -0.2
+      backup_duration: 2.0
+      simulate_ahead_time: 2.0
+    wait:
+      plugin: "nav2_behaviors/Wait"
+      wait_duration: 5.0
+    global_frame: odom
+    robot_base_frame: base_footprint
+    transform_timeout: 0.1
+    use_sim_time: True
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+# nav2_bringup's navigation_launch.py ALWAYS starts velocity_smoother, and
+# dwa_nav_params.yaml has no block for it -- so until now it ran on its
+# COMPILED defaults, max_velocity [0.5, 0.0, 2.5] (verified by configuring the
+# node and reading the parameter back, not from the sample yaml, which says
+# 0.26). That 0.5 would silently clamp the 0.60 asked for above and the robot
+# would just never reach it, with nothing logged. Stated explicitly here so
+# the ceiling is visible and matches DWB.
+#   y stays 0.0 throughout: no mecanum strafing, same as the DWB block.
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    # y component opened up to match DWB's strafe limits -- leaving it 0.0
+    # here would silently clamp every lateral command back to zero, which is
+    # exactly the failure this whole change is fixing.
+    max_velocity: [0.60, 0.40, 1.5]
+    min_velocity: [-0.60, -0.40, -1.5]
+    max_accel: [2.5, 2.5, 3.2]
+    max_decel: [-2.5, -2.5, -3.2]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: True
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      # MILLISECONDS (nav2_waypoint_follower/plugins/wait_at_waypoint.hpp), so
+      # 200 = 0.2 s, and it is also nav2's own stock value. Reads alarming; is
+      # not a bug, don't "fix" it.
+      waypoint_pause_duration: 200
